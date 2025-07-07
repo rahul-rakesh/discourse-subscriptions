@@ -11,55 +11,63 @@ module DiscourseSubscriptions
       before_action :set_api_key
       requires_login
 
+      # app/controllers/discourse_subscriptions/user/subscriptions_controller.rb
+
       def index
         begin
-          customer = Customer.where(user_id: current_user.id)
-          customer_ids = customer.map { |c| c.id } if customer
-          stripe_customer_ids = customer.map { |c| c.customer_id }.uniq if customer
-          subscription_ids =
-            Subscription.where("customer_id in (?)", customer_ids).pluck(
-              :external_id,
-            ) if customer_ids
+          # --- START OF SECURITY FIX ---
+          # This query now explicitly joins through the `customer` to the `user`
+          # and filters on the `users` table. This is a more robust and secure
+          # way to ensure we only fetch subscriptions for the current user.
+          local_subscriptions = ::DiscourseSubscriptions::Subscription
+                                  .joins(customer: :user)
+                                  .where(users: { id: current_user.id })
+                                  .order(created_at: :desc)
+          # --- END OF SECURITY FIX ---
 
-          subscriptions = []
+          return render json: [] if local_subscriptions.empty?
 
-          if subscription_ids
-            prices = []
-            price_params = { limit: 100, expand: ["data.product"] }
-            loop do
-              response = ::Stripe::Price.list(price_params)
-              prices.concat(response[:data])
-              break unless response[:has_more]
-              price_params[:starting_after] = response[:data].last.id
+          all_plans = is_stripe_configured? ? ::Stripe::Price.list(limit: 100, active: true, expand: ['data.product']) : []
+
+          processed_subscriptions = local_subscriptions.map do |sub|
+            plan = all_plans.find { |p| p.id == sub.plan_id } if sub.plan_id
+
+            if plan.nil? && (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
+              begin
+                stripe_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['items.data.price.product'] })
+                plan = stripe_sub&.items&.data&.first&.price
+              rescue ::Stripe::InvalidRequestError
+                next
+              end
             end
-            all_subscriptions = []
 
-            stripe_customer_ids.each do |stripe_customer_id|
-              customer_subscriptions =
-                ::Stripe::Subscription.list(customer: stripe_customer_id, status: "all")
-              all_subscriptions.concat(customer_subscriptions[:data])
-            end
+            next unless plan
 
-            subscriptions = all_subscriptions.select { |sub| subscription_ids.include?(sub[:id]) }
-            subscriptions.map! do |subscription|
-              plan = prices.find { |p| p[:id] == subscription[:items][:data][0][:price][:id] }
-              subscription.to_h.except!(:plan)
-              subscription.to_h.merge(plan: plan, product: plan[:product].to_h.slice(:id, :name))
-            end
-          end
+            renews_at_timestamp = (sub.provider == 'Stripe' && sub.status == 'active' && plan.recurring) ? ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end : nil
 
-          render_json_dump subscriptions
+            {
+              id: sub.external_id,
+              provider: (sub.provider || 'Stripe').capitalize,
+              status: sub.status,
+              plan_nickname: plan.nickname,
+              product_name: plan.product&.name,
+              renews_at: renews_at_timestamp,
+              expires_at: sub.expires_at&.to_i,
+              unit_amount: plan.unit_amount,
+              currency: plan.currency
+            }
+          end.compact
+
+          render_json_dump processed_subscriptions
+
         rescue ::Stripe::InvalidRequestError => e
           render_json_error e.message
         end
       end
 
       def destroy
-        # we cancel but don't remove until the end of the period
-        # full removal is done via webhooks
         begin
           subscription = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
-
           if subscription
             render_json_dump subscription
           else
@@ -72,26 +80,20 @@ module DiscourseSubscriptions
 
       def update
         params.require(:payment_method)
-
-        subscription = Subscription.where(external_id: params[:id]).first
         begin
-          attach_method_to_customer(subscription.customer_id, params[:payment_method])
-          subscription =
-            ::Stripe::Subscription.update(
-              params[:id],
-              { default_payment_method: params[:payment_method] },
+          subscription = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
+          customer = ::DiscourseSubscriptions::Customer.find(subscription.customer_id)
+
+          ::Stripe::PaymentMethod.attach(params[:payment_method], { customer: customer.customer_id })
+
+          ::Stripe::Subscription.update(
+            params[:id],
+            { default_payment_method: params[:payment_method] },
             )
           render json: success_json
         rescue ::Stripe::InvalidRequestError
           render_json_error I18n.t("discourse_subscriptions.card.invalid")
         end
-      end
-
-      private
-
-      def attach_method_to_customer(customer_id, method)
-        customer = Customer.find(customer_id)
-        ::Stripe::PaymentMethod.attach(method, { customer: customer.customer_id })
       end
     end
   end

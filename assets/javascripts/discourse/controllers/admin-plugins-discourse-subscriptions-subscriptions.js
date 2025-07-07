@@ -1,16 +1,59 @@
 import Controller from "@ember/controller";
 import { action } from "@ember/object";
 import { service } from "@ember/service";
+import { tracked } from "@glimmer/tracking";
+import AdminCancelSubscription from "discourse/plugins/discourse-subscriptions/discourse/components/modal/admin-cancel-subscription";
 import { i18n } from "discourse-i18n";
-import AdminCancelSubscription from "../components/modal/admin-cancel-subscription";
+import { ajax } from "discourse/lib/ajax";
 import AdminSubscription from "../models/admin-subscription";
+import User from "discourse/models/user";
 
 export default class AdminPluginsDiscourseSubscriptionsSubscriptionsController extends Controller {
   @service modal;
   @service dialog;
+  @service router;
 
-  loading = false;
+  queryParams = ['username'];
+  username = null;
 
+  @tracked subscriptions = [];
+  @tracked meta = null;
+  @tracked isLoadingMore = false;
+
+  // FIX: This action is now triggered by the UserChooser component
+  @action
+  filterByUser(selectedUser) {
+    // The component provides the username directly as a string.
+    // Setting this property will automatically trigger the route to refresh
+    // because of the `refreshModel: true` setting in the route file.
+    this.set('username', selectedUser);
+  }
+
+  // FIX: New action to clear the filter
+  @action
+  clearFilter() {
+    this.router.transitionTo({ queryParams: { username: null } });
+  }
+
+  @action
+  loadMore() {
+    if (this.isLoadingMore || !this.meta?.more) { return; }
+    this.isLoadingMore = true;
+
+    ajax("/s/admin/subscriptions.json", {
+      method: "GET",
+      data: { offset: this.meta.offset, username: this.username },
+    })
+      .then((result) => {
+        const newSubscriptions = result.subscriptions.map((s) => {
+          if (s.user) { s.user = User.create(s.user); }
+          return AdminSubscription.create(s);
+        });
+        this.subscriptions.pushObjects(newSubscriptions);
+        this.set("meta", result.meta);
+      })
+      .finally(() => { this.isLoadingMore = false; });
+  }
   @action
   showCancelModal(subscription) {
     this.modal.show(AdminCancelSubscription, {
@@ -22,40 +65,46 @@ export default class AdminPluginsDiscourseSubscriptionsSubscriptionsController e
   }
 
   @action
-  loadMore() {
-    if (!this.loading && this.model.has_more) {
-      this.set("loading", true);
+  cancelSubscription(model) {
+    const subscription = model.subscription;
+    const closeModal = model.closeModal;
 
-      return AdminSubscription.loadMore(this.model.last_record).then(
-        (result) => {
-          const updated = this.model.data.concat(result.data);
-          this.set("model", result);
-          this.set("model.data", updated);
-          this.set("loading", false);
+    subscription.loading = true;
+
+    subscription
+      .destroy()
+      .then(() => {
+        this.dialog.alert(i18n("discourse_subscriptions.admin.canceled"));
+        this.router.refresh();
+      })
+      .catch((data) => this.dialog.alert(data.jqXHR.responseJSON.errors.join("\n")))
+      .finally(() => {
+        subscription.loading = false;
+        if (closeModal) {
+          closeModal();
         }
-      );
-    }
+      });
   }
 
   @action
-  cancelSubscription(model) {
-    const subscription = model.subscription;
-    const refund = model.refund;
-    const closeModal = model.closeModal;
+  revokeAccess(subscription) {
+    this.dialog.yesNoConfirm({
+      message: "Are you sure you want to revoke this user's access immediately? This cannot be undone.",
+      didConfirm: () => {
+        subscription.loading = true;
 
-    subscription.set("loading", true);
-    subscription
-      .destroy(refund)
-      .then((result) => {
-        subscription.set("status", result.status);
-        this.dialog.alert(i18n("discourse_subscriptions.admin.canceled"));
-      })
-      .catch((data) =>
-        this.dialog.alert(data.jqXHR.responseJSON.errors.join("\n"))
-      )
-      .finally(() => {
-        subscription.set("loading", false);
-        closeModal();
-      });
+        ajax(`/s/admin/subscriptions/${subscription.id}/revoke`, {
+          method: "POST",
+        })
+          .then(() => {
+            this.dialog.alert("Access has been revoked.");
+            this.router.refresh();
+          })
+          .catch((err) => this.dialog.alert(err.jqXHR.responseJSON.errors[0]))
+          .finally(() => {
+            subscription.loading = false;
+          });
+      },
+    });
   }
 }

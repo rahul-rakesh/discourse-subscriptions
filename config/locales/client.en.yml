@@ -12,6 +12,10 @@ en:
     discourse_subscriptions_public_key: Stripe Publishable Key
     discourse_subscriptions_secret_key: Stripe Secret Key
     discourse_subscriptions_webhook_secret: Stripe Webhook Secret
+    discourse_subscriptions_payment_provider: The payment provider to use for all transactions.
+    discourse_subscriptions_razorpay_key_id: Razorpay Key ID
+    discourse_subscriptions_razorpay_key_secret: Razorpay Key Secret
+    discourse_subscriptions_razorpay_webhook_secret: Razorpay Webhook Secret
     discourse_subscriptions_currency: Default Currency Code. This can be overridden when creating a subscription plan.
     discourse_subscriptions_campaign_enabled: Enables a campaign banner to promote supporting this community financially.
     discourse_subscriptions_campaign_goal: The numerical goal for your support campaign (subscribers or amount raised).
@@ -452,6 +456,8 @@ en:
             amount: Amount
             trial: Trial Period Days
             trial_help: Subscriptions to this plan will automatically start with a free trial of this length
+            duration: Duration (in days)
+            duration_help: For one-time payments, the number of days the user will have access to the group. Leave blank for permanent access.
             group: User Group
             group_help: This is the discourse user group the customer gets added to when the subscription is created.
             active: Active
@@ -478,3 +484,8 @@ en:
             created_at: Created
         ask_refund: Refund the last payment made by the customer?
         canceled: "The subscription is canceled."
+        revoke_access: "Revoke Access"
+        grant_subscription: "Grant Subscription"
+        grant_subscription_modal:
+          title: "Grant a Subscription"
+          grant: "Grant Subscription"
