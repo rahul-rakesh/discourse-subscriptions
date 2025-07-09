@@ -15,49 +15,36 @@ module DiscourseSubscriptions
     skip_before_action :verify_authenticity_token, only: %i[create razorpay]
 
     def create
-      Rails.logger.warn("[SUBS WEBHOOK DEBUG] Received a webhook request at /s/hooks.")
       begin
         payload = request.body.read
         sig_header = request.env["HTTP_STRIPE_SIGNATURE"]
         webhook_secret = SiteSetting.discourse_subscriptions_webhook_secret
         event = ::Stripe::Webhook.construct_event(payload, sig_header, webhook_secret)
-        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Webhook signature verified. Event type: #{event[:type]}.")
       rescue JSON::ParserError => e
-        Rails.logger.error("[SUBS WEBHOOK DEBUG] JSON Parser Error: #{e.message}")
         return render_json_error e.message
       rescue ::Stripe::SignatureVerificationError => e
-        Rails.logger.error("[SUBS WEBHOOK DEBUG] Signature Verification Error: #{e.message}")
         return render_json_error e.message
       end
 
       case event[:type]
       when "checkout.session.completed"
-        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Processing checkout.session.completed.")
         checkout_session = event[:data][:object]
 
-        email = checkout_session.dig(:customer_details, :email)
-        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Session status: #{checkout_session[:status]}, Payment status: #{checkout_session[:payment_status]}, Email: #{email}")
-
         if checkout_session[:payment_status] != "paid"
-          Rails.logger.warn("[SUBS WEBHOOK DEBUG] Exiting because payment_status is not 'paid'.")
           return head 200
         end
 
+        email = checkout_session.customer_details.email
+
         user = ::User.find_by_username_or_email(email)
-        unless user
-          Rails.logger.warn("[SUBS WEBHOOK DEBUG] User not found for email: #{email}. Exiting.")
-          return render_json_error "user not found"
-        end
-        Rails.logger.warn("[SUBS WEBHOOK DEBUG] User found: #{user.username}.")
+        return render_json_error "user not found" if !user
 
         line_items = ::Stripe::Checkout::Session.list_line_items(checkout_session[:id], { limit: 1 })
         item = line_items[:data].first
         plan = item[:price]
         group = plan_group(plan)
 
-        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Finalizing subscription creation for plan #{plan.id}.")
-
-        discourse_customer = Customer.find_or_create_by(user_id: user.id) do |c|
+        discourse_customer = Customer.find_or_create_by!(user_id: user.id) do |c|
           c.customer_id = checkout_session[:customer]
         end
 
@@ -70,9 +57,6 @@ module DiscourseSubscriptions
         )
 
         group&.add(user)
-
-        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Process completed successfully.")
-
 
       when "customer.subscription.updated"
         subscription = event[:data][:object]
@@ -95,7 +79,7 @@ module DiscourseSubscriptions
         subscription = event[:data][:object]
 
         local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: subscription.id)
-        return head 200 unless local_sub # Should not process if we don't have a local record
+        return head 200 unless local_sub
 
         customer = find_active_customer(subscription[:customer], subscription[:plan][:product])
         return render_json_error "customer not found" if !customer
@@ -106,7 +90,6 @@ module DiscourseSubscriptions
         return render_json_error "user not found" if !user
 
         if group = plan_group(subscription[:plan])
-          # FIX: This now calls our new, safer method
           safely_remove_user_from_group(user, group, local_sub.id)
         end
       end
@@ -152,7 +135,6 @@ module DiscourseSubscriptions
           }
 
           subscribe_controller = DiscourseSubscriptions::SubscribeController.new
-          # We must also pass the current_user to the controller instance for it to work
           subscribe_controller.instance_variable_set(:@current_user, user)
           subscribe_controller.send(:finalize_discourse_subscription, transaction, plan)
         else
