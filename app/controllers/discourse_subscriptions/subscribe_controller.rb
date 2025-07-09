@@ -82,6 +82,8 @@ module DiscourseSubscriptions
 
     # app/controllers/discourse_subscriptions/subscribe_controller.rb
 
+    # app/controllers/discourse_subscriptions/subscribe_controller.rb
+
     def create
       params.require(:plan)
       begin
@@ -100,13 +102,16 @@ module DiscourseSubscriptions
           )
           render_json_dump order
 
-        else # --- THIS IS THE STRIPE LOGIC WE ARE CHANGING ---
+        else # Stripe Logic
 
-          # Set the success and cancel URLs for Stripe Checkout
+          # --- START OF FIX ---
+          # Determine the correct mode for Stripe Checkout based on the plan's type.
+          mode = plan.type == 'recurring' ? 'subscription' : 'payment'
+          # --- END OF FIX ---
+
           success_url = "#{Discourse.base_url}/s?checkout=success"
           cancel_url = "#{Discourse.base_url}/s?checkout=cancel"
 
-          # Create the Stripe Checkout Session
           session = ::Stripe::Checkout::Session.create(
             customer_email: current_user.email,
             payment_method_types: ['card'],
@@ -114,13 +119,12 @@ module DiscourseSubscriptions
                            price: plan.id,
                            quantity: 1,
                          }],
-            mode: plan.type, # 'subscription' for recurring, 'payment' for one-time
+            mode: mode, # Use the corrected mode variable here
             success_url: success_url,
             cancel_url: cancel_url,
-            metadata: metadata_user # Pass user_id and username to the session
+            metadata: metadata_user
           )
 
-          # Return the session ID to the frontend
           render json: { session_id: session.id }
         end
 
