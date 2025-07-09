@@ -48,12 +48,19 @@ module DiscourseSubscriptions
           c.customer_id = checkout_session[:customer]
         end
 
+        # START OF FIX: Calculate duration and expiry date
+        duration = plan.metadata&.duration&.to_i
+        expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
+        # END OF FIX
+
         Subscription.create!(
           customer_id: discourse_customer.id,
           external_id: checkout_session[:subscription] || checkout_session[:id],
           plan_id: plan.id,
           provider: 'Stripe',
-          status: 'active'
+          status: 'active',
+          duration: duration,
+          expires_at: expires_at
         )
 
         group&.add(user)
