@@ -44,12 +44,18 @@ extend_content_security_policy(
     https://*.hcaptcha.com
     https://hcaptcha.com
     https://m.stripe.network
+    https://b.stripecdn.com
   ],
   frame_src: %w[
     https://js.stripe.com/v3/
     https://hooks.stripe.com
     https://*.hcaptcha.com
     https://hcaptcha.com
+    https://b.stripecdn.com
+  ],
+  connect_src: %w[
+    https://api.stripe.com
+    https://checkout.stripe.com
   ]
 )
 
