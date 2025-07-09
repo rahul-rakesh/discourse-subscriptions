@@ -109,7 +109,7 @@ module DiscourseSubscriptions
           mode = plan.type == 'recurring' ? 'subscription' : 'payment'
           # --- END OF FIX ---
 
-          success_url = "#{Discourse.base_url}/s?checkout=success"
+          success_url = "#{Discourse.base_url}/u/#{current_user.username_lower}/billing/subscriptions?checkout=success"
           cancel_url = "#{Discourse.base_url}/s?checkout=cancel"
 
           session = ::Stripe::Checkout::Session.create(
