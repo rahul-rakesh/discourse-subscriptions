@@ -80,79 +80,50 @@ module DiscourseSubscriptions
       end
     end
 
+    # app/controllers/discourse_subscriptions/subscribe_controller.rb
+
     def create
       params.require(:plan)
       begin
         plan = ::Stripe::Price.retrieve(params[:plan])
+
         if SiteSetting.discourse_subscriptions_payment_provider == "Razorpay"
-          # Add this notes hash
           notes = {
             user_id: current_user.id,
             username: current_user.username,
             plan_id: plan.id
           }
-          order =
-            DiscourseSubscriptions::Providers::RazorpayProvider.create_order(
-              plan[:unit_amount],
-              plan[:currency].upcase,
-              notes # Pass the notes here
-            )
+          order = DiscourseSubscriptions::Providers::RazorpayProvider.create_order(
+            plan[:unit_amount],
+            plan[:currency].upcase,
+            notes
+          )
           render_json_dump order
-        else
-          params.require(:source)
-          customer =
-            find_or_create_customer(
-              params[:source],
-              params[:cardholder_name],
-              params[:cardholder_address],
-              )
-          if params[:promo].present?
-            promo_code = ::Stripe::PromotionCode.list({ code: params[:promo] })
-            promo_code = promo_code[:data][0]
-            if promo_code.blank?
-              return render_json_error I18n.t("js.discourse_subscriptions.subscribe.invalid_coupon")
-            end
-          end
-          recurring_plan = plan[:type] == "recurring"
-          if recurring_plan
-            trial_days = plan.dig(:metadata, :trial_period_days)
-            promo_code_id = promo_code[:id] if promo_code
-            subscription_params = {
-              customer: customer[:id],
-              items: [{ price: params[:plan] }],
-              metadata: metadata_user,
-              trial_period_days: trial_days,
-              promotion_code: promo_code_id,
-            }
-            if SiteSetting.discourse_subscriptions_enable_automatic_tax
-              subscription_params[:automatic_tax] = { enabled: true }
-            end
-            transaction = ::Stripe::Subscription.create(subscription_params)
-            payment_intent = retrieve_payment_intent(transaction[:latest_invoice]) if transaction[:status] == "incomplete"
-          else
-            coupon_id = promo_code.dig(:coupon, :id) if promo_code
-            invoice_params = { customer: customer[:id] }
-            if SiteSetting.discourse_subscriptions_enable_automatic_tax
-              invoice_params[:automatic_tax] = { enabled: true }
-            end
-            invoice = ::Stripe::Invoice.create(invoice_params)
-            ::Stripe::InvoiceItem.create(
-              customer: customer[:id],
-              price: params[:plan],
-              discounts: [{ coupon: coupon_id }],
-              invoice: invoice[:id],
-              )
-            transaction = ::Stripe::Invoice.finalize_invoice(invoice[:id])
-            payment_intent = retrieve_payment_intent(transaction[:id]) if transaction[:status] == "open"
-            if payment_intent.nil?
-              return(render_json_error I18n.t("js.discourse_subscriptions.subscribe.transaction_error"))
-            end
-            transaction = ::Stripe::Invoice.pay(invoice[:id]) if payment_intent[:status] == "successful"
-          end
-          finalize_transaction(transaction, plan) if transaction_ok(transaction)
-          transaction = transaction.to_h.merge(transaction, payment_intent: payment_intent)
-          render_json_dump transaction
+
+        else # --- THIS IS THE STRIPE LOGIC WE ARE CHANGING ---
+
+          # Set the success and cancel URLs for Stripe Checkout
+          success_url = "#{Discourse.base_url}/s?checkout=success"
+          cancel_url = "#{Discourse.base_url}/s?checkout=cancel"
+
+          # Create the Stripe Checkout Session
+          session = ::Stripe::Checkout::Session.create(
+            customer_email: current_user.email,
+            payment_method_types: ['card'],
+            line_items: [{
+                           price: plan.id,
+                           quantity: 1,
+                         }],
+            mode: plan.type, # 'subscription' for recurring, 'payment' for one-time
+            success_url: success_url,
+            cancel_url: cancel_url,
+            metadata: metadata_user # Pass user_id and username to the session
+          )
+
+          # Return the session ID to the frontend
+          render json: { session_id: session.id }
         end
+
       rescue ::Stripe::InvalidRequestError => e
         render_json_error e.message
       rescue ::Razorpay::Error => e
