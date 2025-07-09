@@ -15,65 +15,64 @@ module DiscourseSubscriptions
     skip_before_action :verify_authenticity_token, only: %i[create razorpay]
 
     def create
+      Rails.logger.warn("[SUBS WEBHOOK DEBUG] Received a webhook request at /s/hooks.")
       begin
         payload = request.body.read
         sig_header = request.env["HTTP_STRIPE_SIGNATURE"]
         webhook_secret = SiteSetting.discourse_subscriptions_webhook_secret
         event = ::Stripe::Webhook.construct_event(payload, sig_header, webhook_secret)
+        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Webhook signature verified. Event type: #{event[:type]}.")
       rescue JSON::ParserError => e
+        Rails.logger.error("[SUBS WEBHOOK DEBUG] JSON Parser Error: #{e.message}")
         return render_json_error e.message
       rescue ::Stripe::SignatureVerificationError => e
+        Rails.logger.error("[SUBS WEBHOOK DEBUG] Signature Verification Error: #{e.message}")
         return render_json_error e.message
       end
 
       case event[:type]
       when "checkout.session.completed"
+        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Processing checkout.session.completed.")
         checkout_session = event[:data][:object]
 
-        if SiteSetting.discourse_subscriptions_enable_verbose_logging
-          Rails.logger.warn("checkout.session.completed data: #{checkout_session}")
-        end
-        email = checkout_session[:customer_email]
+        email = checkout_session.dig(:customer_details, :email)
+        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Session status: #{checkout_session[:status]}, Payment status: #{checkout_session[:payment_status]}, Email: #{email}")
 
-        return head 200 if checkout_session[:status] != "complete"
-        return render_json_error "email not found" if !email
-
-        if checkout_session[:customer].nil?
-          customer = ::Stripe::Customer.create({ email: email })
-          customer_id = customer[:id]
-        else
-          customer_id = checkout_session[:customer]
-        end
-
-        if SiteSetting.discourse_subscriptions_enable_verbose_logging
-          Rails.logger.warn("Looking up user with email: #{email}")
+        if checkout_session[:payment_status] != "paid"
+          Rails.logger.warn("[SUBS WEBHOOK DEBUG] Exiting because payment_status is not 'paid'.")
+          return head 200
         end
 
         user = ::User.find_by_username_or_email(email)
-        return render_json_error "user not found" if !user
-
-        discourse_customer = Customer.create(user_id: user.id, customer_id: customer_id)
-
-        subscription = checkout_session[:subscription]
-        if subscription.present?
-          Subscription.create(customer_id: discourse_customer.id, external_id: subscription)
+        unless user
+          Rails.logger.warn("[SUBS WEBHOOK DEBUG] User not found for email: #{email}. Exiting.")
+          return render_json_error "user not found"
         end
+        Rails.logger.warn("[SUBS WEBHOOK DEBUG] User found: #{user.username}.")
 
         line_items = ::Stripe::Checkout::Session.list_line_items(checkout_session[:id], { limit: 1 })
         item = line_items[:data].first
+        plan = item[:price]
+        group = plan_group(plan)
 
-        group = plan_group(item[:price])
-        group.add(user) if group
+        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Finalizing subscription creation for plan #{plan.id}.")
 
-        discourse_customer.product_id = item[:price][:product]
-        discourse_customer.save!
-
-        if !subscription.nil?
-          ::Stripe::Subscription.update(
-            subscription,
-            { metadata: { user_id: user.id, username: user.username } },
-            )
+        discourse_customer = Customer.find_or_create_by(user_id: user.id) do |c|
+          c.customer_id = checkout_session[:customer]
         end
+
+        Subscription.create!(
+          customer_id: discourse_customer.id,
+          external_id: checkout_session[:subscription] || checkout_session[:id],
+          plan_id: plan.id,
+          provider: 'Stripe',
+          status: 'active'
+        )
+
+        group&.add(user)
+
+        Rails.logger.warn("[SUBS WEBHOOK DEBUG] Process completed successfully.")
+
 
       when "customer.subscription.updated"
         subscription = event[:data][:object]
