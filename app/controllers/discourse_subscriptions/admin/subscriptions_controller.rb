@@ -40,23 +40,26 @@ module DiscourseSubscriptions
               id: sub.external_id, provider: (sub.provider || 'Stripe').capitalize, status: sub.status,
               user: { id: user_obj.id, username: user_obj.username, avatar_template: user_obj.avatar_template_url },
               created_at: sub.created_at.to_i, expires_at: sub.expires_at&.to_i,
-              unit_amount: nil, currency: nil
+              unit_amount: nil, currency: nil, plan_type: nil
             }
             plan = all_plans.find { |p| p.id == sub.plan_id }
 
             if sub.provider == 'Stripe' && is_stripe_configured?
               begin
-                api_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['plan.product'] })
-                plan ||= api_sub&.plan
-                serialized_sub[:status] = api_sub.status if api_sub
-                serialized_sub[:expires_at] = api_sub.cancel_at_period_end ? api_sub.current_period_end : nil if api_sub
+                # Only try to retrieve as a Subscription object if it looks like one
+                if sub.external_id.start_with?("sub_")
+                  api_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['plan.product'] })
+                  plan ||= api_sub&.plan
+                  serialized_sub[:status] = api_sub.status if api_sub
+                  serialized_sub[:expires_at] = api_sub.cancel_at_period_end ? api_sub.current_period_end : nil if api_sub
+                end
               rescue ::Stripe::InvalidRequestError
                 serialized_sub[:status] = 'not_in_stripe'
               end
             end
 
             if plan
-              serialized_sub.merge!(plan_name: plan.product&.name, plan_nickname: plan.nickname, unit_amount: plan.unit_amount, currency: plan.currency)
+              serialized_sub.merge!(plan_name: plan.product&.name, plan_nickname: plan.nickname, unit_amount: plan.unit_amount, currency: plan.currency, plan_type: plan.type)
             end
             all_subscriptions << serialized_sub
           end
@@ -71,7 +74,6 @@ module DiscourseSubscriptions
           }
 
         rescue => e
-          # --- NEW, MORE DETAILED LOGGING ---
           error_message = "Discourse Subscriptions Error: Failed to process subscriptions. Class: #{e.class.name}, Message: #{e.message}, Backtrace: #{e.backtrace.join("\n")}"
           Rails.logger.error(error_message)
           render_json_error(error_message)

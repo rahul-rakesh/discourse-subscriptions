@@ -1,5 +1,5 @@
 import { fn } from "@ember/helper";
-import { eq } from "truth-helpers";
+import { and, eq } from "truth-helpers";
 import { LinkTo } from "@ember/routing";
 import RouteTemplate from "ember-route-template";
 import DButton from "discourse/components/d-button";
@@ -66,14 +66,14 @@ export default RouteTemplate(
               <td class="td-right">
                 {{#if subscription.loading}}
                   {{loadingSpinner size="small"}}
-                {{else if (eq subscription.provider "Stripe")}}
+                {{else if (and (eq subscription.provider "Stripe") (eq subscription.plan_type "recurring"))}}
                   <DButton
                     @disabled={{eq subscription.status "canceled"}}
                     @label="cancel"
                     @action={{fn @controller.showCancelModal subscription}}
                     @icon="xmark"
                   />
-                {{else}}
+                {{else if (not (eq subscription.provider "Stripe"))}}
                   <DButton
                     @disabled={{eq subscription.status "revoked"}}
                     @label="discourse_subscriptions.admin.revoke_access"
