@@ -179,6 +179,8 @@ module DiscourseSubscriptions
 
 
     private
+    private
+
     def finalize_discourse_subscription(transaction, plan, user, duration_in_days = nil, provider = nil)
       group_name = plan.metadata.group_name if plan.metadata
       if group_name.present?
@@ -186,7 +188,10 @@ module DiscourseSubscriptions
         group&.add(user)
       end
 
-      duration = duration_in_days || (plan.metadata.duration.to_i if plan.metadata&.duration)
+      # FIX: Convert duration_in_days to an integer at the start
+      duration = duration_in_days.present? ? duration_in_days.to_i : nil
+      duration ||= plan.metadata.duration.to_i if plan.metadata&.duration
+
       expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
 
       customer = ::DiscourseSubscriptions::Customer.find_or_create_by!(user_id: user.id) do |c|
