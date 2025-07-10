@@ -39,9 +39,11 @@ module DiscourseSubscriptions
             next unless plan
 
             renews_at_timestamp = nil
+            # START OF FIX: Use hash syntax `plan[:recurring]` instead of method `plan.recurring`
             if sub.provider == 'Stripe' && sub.status == 'active' && plan[:recurring] && sub.external_id.start_with?("sub_")
               renews_at_timestamp = ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end
             end
+            # END OF FIX
 
             {
               id: sub.external_id,
