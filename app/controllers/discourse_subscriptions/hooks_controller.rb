@@ -88,15 +88,19 @@ module DiscourseSubscriptions
         local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: subscription.id)
         return head 200 unless local_sub
 
-        customer = find_active_customer(subscription[:customer], subscription[:plan][:product])
+        # Get the plan/price object from the first subscription item
+        price = subscription.items.data[0].price
+        return head 200 unless price # Exit if we can't find price info
+
+        customer = find_active_customer(subscription.customer, price.product)
         return render_json_error "customer not found" if !customer
 
-        update_status(customer.id, subscription[:id], subscription[:status])
+        update_status(customer.id, subscription.id, subscription.status)
 
         user = ::User.find(customer.user_id)
         return render_json_error "user not found" if !user
 
-        if group = plan_group(subscription[:plan])
+        if group = plan_group(price) # Pass the price object to plan_group
           safely_remove_user_from_group(user, group, local_sub.id)
         end
       end
