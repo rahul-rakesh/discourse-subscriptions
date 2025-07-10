@@ -19,7 +19,6 @@ module DiscourseSubscriptions
                                   .order(created_at: :desc)
 
           processed_subscriptions = local_subscriptions.map do |sub|
-            # Default values
             plan_nickname = "N/A"
             product_name = "N/A"
             renews_at = nil
@@ -28,7 +27,6 @@ module DiscourseSubscriptions
             currency = nil
             plan_type = 'one_time'
 
-            # For any Stripe subscription, get the latest details directly from Stripe
             if (sub.provider == 'Stripe' || sub.provider.nil?) && sub.external_id.start_with?('sub_') && is_stripe_configured?
               begin
                 stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
@@ -53,7 +51,7 @@ module DiscourseSubscriptions
               rescue ::Stripe::InvalidRequestError
                 status = 'not_in_stripe'
               end
-            elsif sub.expires_at.present? # For one-time payments (Razorpay, Manual)
+            elsif sub.expires_at.present?
               renews_at = sub.expires_at.to_i
             end
 
@@ -88,8 +86,7 @@ module DiscourseSubscriptions
             render json: {
               id: stripe_sub.id,
               status: 'canceled',
-              renews_at: stripe_sub.current_period_end,
-              plan_type: 'recurring'
+              renews_at: stripe_sub.current_period_end
             }
           else
             render_json_error I18n.t("discourse_subscriptions.customer_not_found")

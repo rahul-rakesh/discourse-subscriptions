@@ -10,23 +10,27 @@ export default class UserBillingSubscriptionsIndexRoute extends Route {
   @service router;
 
   model() {
-    return UserSubscription.findAll();
+    return UserSubscription.findAll().then((result) =>
+        result.map((sub) => UserSubscription.create(sub))
+    );
   }
 
   @action
   cancelSubscription(subscription) {
     this.dialog.yesNoConfirm({
       message: i18n(
-          "discourse_subscriptions.user.subscriptions.operations.destroy.confirm",
+          "discourse_subscriptions.user.subscriptions.operations.destroy.confirm"
       ),
       didConfirm: () => {
         subscription.set("loading", true);
-        subscription.destroy().then((result) => {
-          subscription.setProperties({
-            status: result.status,
-            renews_at: result.renews_at
-          });
-        })
+        subscription.destroy()
+            .then(updatedSubscription => {
+              // Update the existing model with the new data from the server
+              subscription.setProperties({
+                status: updatedSubscription.status,
+                renews_at: updatedSubscription.renews_at
+              });
+            })
             .catch(popupAjaxError)
             .finally(() => subscription.set("loading", false));
       },
