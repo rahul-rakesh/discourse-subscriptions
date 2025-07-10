@@ -18,58 +18,72 @@ module DiscourseSubscriptions
                                   .where(users: { id: current_user.id })
                                   .order(created_at: :desc)
 
-          return render json: [] if local_subscriptions.empty?
-
-          all_plans = is_stripe_configured? ? ::Stripe::Price.list(limit: 100, active: true, expand: ['data.product']) : []
-
           processed_subscriptions = local_subscriptions.map do |sub|
-            plan = all_plans.find { |p| p.id == sub.plan_id } if sub.plan_id
+            plan_nickname = "N/A"
+            product_name = "N/A"
+            renews_at = nil
+            status = sub.status
+            unit_amount = nil
+            currency = nil
 
-            if plan.nil? && (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
+            # For any Stripe subscription, get the latest details directly from Stripe
+            if sub.provider == 'Stripe' && sub.external_id.start_with?('sub_') && is_stripe_configured?
               begin
-                if sub.external_id.start_with?("sub_")
-                  stripe_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['items.data.price.product'] })
-                  plan = stripe_sub&.items&.data&.first&.price
-                end
+                stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
+                price = stripe_sub.items.data[0].price
+
+                plan_nickname = price.nickname
+                product_name = price.product.name
+                unit_amount = price.unit_amount
+                currency = price.currency
+
+                # Use the definitive status from Stripe; update local record if needed
+                status = stripe_sub.status
+                sub.update(status: status) if sub.status != status
+
+                # If canceled, the renewal date is when it finally expires. Otherwise, it's the next renewal date.
+                renews_at = stripe_sub.cancel_at_period_end ? stripe_sub.canceled_at : stripe_sub.current_period_end
+
               rescue ::Stripe::InvalidRequestError
-                next
+                status = 'not_in_stripe'
               end
-            end
-
-            next unless plan
-
-            renews_at_timestamp = nil
-            if sub.provider == 'Stripe' && sub.status == 'active' && plan[:recurring] && sub.external_id.start_with?("sub_")
-              renews_at_timestamp = ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end
+            elsif sub.expires_at.present? # For one-time payments (Razorpay, Manual)
+              renews_at = sub.expires_at.to_i
             end
 
             {
               id: sub.external_id,
               provider: (sub.provider || 'Stripe').capitalize,
-              status: sub.status,
-              plan_nickname: plan[:nickname],
-              product_name: plan[:product]&.name,
-              renews_at: renews_at_timestamp,
-              expires_at: sub.expires_at&.to_i,
-              unit_amount: plan[:unit_amount],
-              currency: plan[:currency]
+              status: status,
+              plan_nickname: plan_nickname,
+              product_name: product_name,
+              renews_at: renews_at,
+              unit_amount: unit_amount,
+              currency: currency
             }
           end.compact
 
           render json: processed_subscriptions
-
-        rescue ::Stripe::InvalidRequestError => e
-          render_json_error e.message
+        rescue => e
+          Rails.logger.error("Error fetching user subscriptions: #{e.class} #{e.message}\n#{e.backtrace.join("\n")}")
+          render_json_error(e)
         end
       end
 
       def destroy
         begin
-          subscription = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
-          if subscription
+          stripe_sub = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
+
+          if stripe_sub
             local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
-            local_sub&.update(status: 'canceled') # Set status to 'canceled'
-            render json: subscription
+            local_sub&.update(status: 'canceled')
+
+            # Return a JSON object that reflects the new, correct state
+            render json: {
+              id: stripe_sub.id,
+              status: 'canceled',
+              renews_at: stripe_sub.current_period_end
+            }
           else
             render_json_error I18n.t("discourse_subscriptions.customer_not_found")
           end
