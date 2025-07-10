@@ -10,14 +10,10 @@ export default class UserBillingSubscriptionsIndexRoute extends Route {
   @service router;
 
   model() {
-    console.log("[SUBS DEBUG] Frontend: Fetching subscriptions from server...");
     return UserSubscription.findAll().then((result) => {
-      console.log("[SUBS DEBUG] Frontend: Received data from server:", result);
-      if (Array.isArray(result)) {
-        return result.map((sub) => UserSubscription.create(sub));
-      }
-      console.error("[SUBS DEBUG] Frontend: Server response is NOT an array.", result);
-      return []; // Return empty array on failure to prevent crash
+      // FIX: The data is nested inside a 'subscriptions' key.
+      const subscriptions = result.subscriptions || [];
+      return subscriptions.map((sub) => UserSubscription.create(sub));
     });
   }
 
@@ -28,26 +24,16 @@ export default class UserBillingSubscriptionsIndexRoute extends Route {
           "discourse_subscriptions.user.subscriptions.operations.destroy.confirm"
       ),
       didConfirm: () => {
-        console.log("[SUBS DEBUG] Frontend: 'Cancel' confirmed for subscription:", subscription.id);
         subscription.set("loading", true);
         subscription.destroy()
             .then(updatedSubscription => {
-              console.log("[SUBS DEBUG] Frontend: 'destroy' promise resolved. Data from server:", updatedSubscription);
-
-              // This is the object with the new status and date
-              const newProperties = {
+              subscription.setProperties({
                 status: updatedSubscription.status,
                 renews_at: updatedSubscription.renews_at
-              };
-
-              console.log("[SUBS DEBUG] Frontend: Updating model properties with:", newProperties);
-              subscription.setProperties(newProperties);
+              });
             })
             .catch(popupAjaxError)
-            .finally(() => {
-              console.log("[SUBS DEBUG] Frontend: 'finally' block. Setting loading to false.");
-              subscription.set("loading", false)
-            });
+            .finally(() => subscription.set("loading", false));
       },
     });
   }
