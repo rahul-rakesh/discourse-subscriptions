@@ -26,6 +26,9 @@ module DiscourseSubscriptions
         return render_json_error e.message
       end
 
+      # FULL PAYLOAD LOGGING
+      Rails.logger.warn("[SUBS DATA] Full webhook payload: #{event.to_json}")
+
       case event[:type]
       when "checkout.session.completed"
         checkout_session = event[:data][:object]
@@ -34,7 +37,9 @@ module DiscourseSubscriptions
           return head 200
         end
 
-        email = checkout_session.customer_details.email
+        # ROBUST EMAIL LOOKUP
+        email = checkout_session.customer_details&.email || checkout_session.customer&.email
+        return render_json_error "customer email not found in webhook" if email.blank?
 
         user = ::User.find_by_username_or_email(email)
         return render_json_error "user not found" if !user
