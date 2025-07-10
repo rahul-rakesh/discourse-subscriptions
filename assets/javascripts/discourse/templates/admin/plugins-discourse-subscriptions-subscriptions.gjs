@@ -1,5 +1,5 @@
 import { fn } from "@ember/helper";
-import { and, eq, not } from "truth-helpers";
+import { and, eq, not, or } from "truth-helpers";
 import { LinkTo } from "@ember/routing";
 import RouteTemplate from "ember-route-template";
 import DButton from "discourse/components/d-button";
