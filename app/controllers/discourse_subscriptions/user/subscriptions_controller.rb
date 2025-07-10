@@ -18,7 +18,10 @@ module DiscourseSubscriptions
                                   .where(users: { id: current_user.id })
                                   .order(created_at: :desc)
 
+          return render json: [] if local_subscriptions.empty?
+
           processed_subscriptions = local_subscriptions.map do |sub|
+            # Default values
             plan_nickname = "N/A"
             product_name = "N/A"
             renews_at = nil
@@ -26,8 +29,9 @@ module DiscourseSubscriptions
             unit_amount = nil
             currency = nil
 
-            # For any Stripe subscription, get the latest details directly from Stripe
-            if sub.provider == 'Stripe' && sub.external_id.start_with?('sub_') && is_stripe_configured?
+            # START OF FIX: This condition now handles old subscriptions where provider is nil
+            if (sub.provider == 'Stripe' || sub.provider.nil?) && sub.external_id.start_with?('sub_') && is_stripe_configured?
+              # END OF FIX
               begin
                 stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
                 price = stripe_sub.items.data[0].price
@@ -36,18 +40,16 @@ module DiscourseSubscriptions
                 product_name = price.product.name
                 unit_amount = price.unit_amount
                 currency = price.currency
-
-                # Use the definitive status from Stripe; update local record if needed
                 status = stripe_sub.status
+
                 sub.update(status: status) if sub.status != status
 
-                # If canceled, the renewal date is when it finally expires. Otherwise, it's the next renewal date.
                 renews_at = stripe_sub.cancel_at_period_end ? stripe_sub.canceled_at : stripe_sub.current_period_end
 
               rescue ::Stripe::InvalidRequestError
                 status = 'not_in_stripe'
               end
-            elsif sub.expires_at.present? # For one-time payments (Razorpay, Manual)
+            elsif sub.expires_at.present?
               renews_at = sub.expires_at.to_i
             end
 
@@ -78,7 +80,6 @@ module DiscourseSubscriptions
             local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
             local_sub&.update(status: 'canceled')
 
-            # Return a JSON object that reflects the new, correct state
             render json: {
               id: stripe_sub.id,
               status: 'canceled',
