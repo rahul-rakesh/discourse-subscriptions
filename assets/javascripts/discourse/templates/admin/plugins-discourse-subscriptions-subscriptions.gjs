@@ -68,15 +68,14 @@ export default RouteTemplate(
                   {{loadingSpinner size="small"}}
                 {{else if (and (eq subscription.provider "Stripe") (eq subscription.plan_type "recurring"))}}
                   <DButton
-                      @disabled={{eq subscription.status "canceled"}}
+                      @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
                       @label="cancel"
                       @action={{fn @controller.showCancelModal subscription}}
                       @icon="xmark"
                   />
-                {{! START OF FIX: Add this new block for one-time Stripe and other providers }}
                 {{else if (or (not (eq subscription.provider "Stripe")) (eq subscription.plan_type "one_time"))}}
                   <DButton
-                      @disabled={{eq subscription.status "revoked"}}
+                      @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
                       @label="discourse_subscriptions.admin.revoke_access"
                       @action={{fn @controller.revokeAccess subscription}}
                       @icon="user-slash"

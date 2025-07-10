@@ -3,10 +3,8 @@ import DButton from "discourse/components/d-button";
 import loadingSpinner from "discourse/helpers/loading-spinner";
 import routeAction from "discourse/helpers/route-action";
 import { i18n } from "discourse-i18n";
-// FIX: Use the full, unambiguous plugin path for helpers to ensure they are found correctly.
-import formatUnixDate from "discourse/plugins/discourse-subscriptions/discourse/helpers/format-unix-date";
 import formatAbsoluteDate from "discourse/plugins/discourse-subscriptions/discourse/helpers/format-absolute-date";
-import { eq } from "truth-helpers";
+import { eq, or } from "truth-helpers";
 
 export default RouteTemplate(
 <template>
@@ -43,7 +41,7 @@ export default RouteTemplate(
               {{loadingSpinner size="small"}}
             {{else if (eq subscription.provider "Stripe")}}
               <DButton
-                @disabled={{eq subscription.status "canceled"}}
+                @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
                 @action={{routeAction "cancelSubscription" subscription}}
                 @label="discourse_subscriptions.user.subscriptions.cancel"
                 class="btn-danger"
