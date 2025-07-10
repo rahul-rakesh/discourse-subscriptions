@@ -11,8 +11,6 @@ module DiscourseSubscriptions
       before_action :set_api_key
       requires_login
 
-      # app/controllers/discourse_subscriptions/user/subscriptions_controller.rb
-
       def index
         begin
           local_subscriptions = ::DiscourseSubscriptions::Subscription
@@ -41,7 +39,7 @@ module DiscourseSubscriptions
             next unless plan
 
             renews_at_timestamp = nil
-            if sub.provider == 'Stripe' && sub.status == 'active' && plan.recurring && sub.external_id.start_with?("sub_")
+            if sub.provider == 'Stripe' && sub.status == 'active' && plan[:recurring] && sub.external_id.start_with?("sub_")
               renews_at_timestamp = ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end
             end
 
@@ -49,12 +47,12 @@ module DiscourseSubscriptions
               id: sub.external_id,
               provider: (sub.provider || 'Stripe').capitalize,
               status: sub.status,
-              plan_nickname: plan.nickname,
-              product_name: plan.product&.name,
+              plan_nickname: plan[:nickname],
+              product_name: plan[:product]&.name,
               renews_at: renews_at_timestamp,
               expires_at: sub.expires_at&.to_i,
-              unit_amount: plan.unit_amount,
-              currency: plan.currency
+              unit_amount: plan[:unit_amount],
+              currency: plan[:currency]
             }
           end.compact
 
@@ -69,7 +67,9 @@ module DiscourseSubscriptions
         begin
           subscription = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
           if subscription
-            render_json_dump subscription
+            local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
+            local_sub&.update(status: subscription.status)
+            render json: subscription
           else
             render_json_error I18n.t("discourse_subscriptions.customer_not_found")
           end
