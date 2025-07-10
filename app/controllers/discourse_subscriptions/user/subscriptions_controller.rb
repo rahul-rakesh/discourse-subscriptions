@@ -15,15 +15,10 @@ module DiscourseSubscriptions
 
       def index
         begin
-          # --- START OF SECURITY FIX ---
-          # This query now explicitly joins through the `customer` to the `user`
-          # and filters on the `users` table. This is a more robust and secure
-          # way to ensure we only fetch subscriptions for the current user.
           local_subscriptions = ::DiscourseSubscriptions::Subscription
                                   .joins(customer: :user)
                                   .where(users: { id: current_user.id })
                                   .order(created_at: :desc)
-          # --- END OF SECURITY FIX ---
 
           return render json: [] if local_subscriptions.empty?
 
@@ -34,8 +29,10 @@ module DiscourseSubscriptions
 
             if plan.nil? && (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
               begin
-                stripe_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['items.data.price.product'] })
-                plan = stripe_sub&.items&.data&.first&.price
+                if sub.external_id.start_with?("sub_")
+                  stripe_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['items.data.price.product'] })
+                  plan = stripe_sub&.items&.data&.first&.price
+                end
               rescue ::Stripe::InvalidRequestError
                 next
               end
@@ -43,7 +40,10 @@ module DiscourseSubscriptions
 
             next unless plan
 
-            renews_at_timestamp = (sub.provider == 'Stripe' && sub.status == 'active' && plan.recurring) ? ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end : nil
+            renews_at_timestamp = nil
+            if sub.provider == 'Stripe' && sub.status == 'active' && plan.recurring && sub.external_id.start_with?("sub_")
+              renews_at_timestamp = ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end
+            end
 
             {
               id: sub.external_id,
@@ -58,7 +58,7 @@ module DiscourseSubscriptions
             }
           end.compact
 
-          render_json_dump processed_subscriptions
+          render json: processed_subscriptions
 
         rescue ::Stripe::InvalidRequestError => e
           render_json_error e.message
