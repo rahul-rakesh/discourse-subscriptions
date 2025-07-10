@@ -44,9 +44,12 @@ module DiscourseSubscriptions
         plan = item[:price]
         group = plan_group(plan)
 
+        # START OF FIX
+        stripe_customer_id = checkout_session[:customer] || "cus_#{user.id}_#{SecureRandom.hex(8)}"
         discourse_customer = Customer.find_or_create_by!(user_id: user.id) do |c|
-          c.customer_id = checkout_session[:customer]
+          c.customer_id = stripe_customer_id
         end
+        # END OF FIX
 
         duration = plan.metadata&.duration&.to_i
         expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
