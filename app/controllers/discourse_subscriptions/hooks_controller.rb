@@ -70,15 +70,18 @@ module DiscourseSubscriptions
         status = subscription[:status]
         return head 200 if !%w[complete active].include?(status)
 
-        customer = find_active_customer(subscription[:customer], subscription[:plan][:product])
+        price = subscription.items.data[0].price
+        return head 200 unless price
+
+        customer = find_active_customer(subscription.customer, price.product)
         return render_json_error "customer not found" if !customer
 
-        update_status(customer.id, subscription[:id], status)
+        update_status(customer.id, subscription.id, status)
 
         user = ::User.find_by(id: customer.user_id)
         return render_json_error "user not found" if !user
 
-        if group = plan_group(subscription[:plan])
+        if group = plan_group(price)
           group.add(user)
         end
 
