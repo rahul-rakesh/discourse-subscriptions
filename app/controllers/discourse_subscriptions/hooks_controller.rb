@@ -15,45 +15,60 @@ module DiscourseSubscriptions
     skip_before_action :verify_authenticity_token, only: %i[create razorpay]
 
     def create
+      Rails.logger.warn("[SUBS DEBUG] Stripe webhook received.")
       begin
         payload = request.body.read
         sig_header = request.env["HTTP_STRIPE_SIGNATURE"]
         webhook_secret = SiteSetting.discourse_subscriptions_webhook_secret
         event = ::Stripe::Webhook.construct_event(payload, sig_header, webhook_secret)
+        Rails.logger.warn("[SUBS DEBUG] Webhook signature verified. Event Type: #{event[:type]}")
+        Rails.logger.warn("[SUBS DEBUG] Full event data: #{event.to_json}") # Log the full event
       rescue JSON::ParserError => e
+        Rails.logger.error("[SUBS DEBUG] JSON Parser Error: #{e.message}")
         return render_json_error e.message
       rescue ::Stripe::SignatureVerificationError => e
+        Rails.logger.error("[SUBS DEBUG] Signature Verification Error: #{e.message}")
         return render_json_error e.message
       end
 
       case event[:type]
       when "checkout.session.completed"
         checkout_session = event[:data][:object]
+        Rails.logger.warn("[SUBS DEBUG] Processing checkout.session.completed. Payment Status: #{checkout_session[:payment_status]}")
 
         if checkout_session[:payment_status] != "paid"
+          Rails.logger.warn("[SUBS DEBUG] Exiting because payment_status is not 'paid'.")
           return head 200
         end
 
         email = checkout_session.customer_details.email
+        Rails.logger.warn("[SUBS DEBUG] Customer email: #{email}")
 
         user = ::User.find_by_username_or_email(email)
-        return render_json_error "user not found" if !user
+        unless user
+          Rails.logger.error("[SUBS DEBUG] User with email #{email} not found.")
+          return render_json_error "user not found"
+        end
+        Rails.logger.warn("[SUBS DEBUG] Found user: #{user.username}")
 
         line_items = ::Stripe::Checkout::Session.list_line_items(checkout_session[:id], { limit: 1 })
         item = line_items[:data].first
         plan = item[:price]
+        Rails.logger.warn("[SUBS DEBUG] Plan object from line item: #{plan.to_json}")
+
         group = plan_group(plan)
+        Rails.logger.warn("[SUBS DEBUG] Group found from plan metadata: #{group&.name || 'None'}")
 
         discourse_customer = Customer.find_or_create_by!(user_id: user.id) do |c|
           c.customer_id = checkout_session[:customer]
         end
+        Rails.logger.warn("[SUBS DEBUG] Created/found local customer record: #{discourse_customer.id}")
 
-        # START OF FIX: Calculate duration and expiry date
         duration = plan.metadata&.duration&.to_i
         expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
-        # END OF FIX
+        Rails.logger.warn("[SUBS DEBUG] Calculated duration: #{duration}, expires_at: #{expires_at}")
 
-        Subscription.create!(
+        new_subscription = Subscription.new(
           customer_id: discourse_customer.id,
           external_id: checkout_session[:subscription] || checkout_session[:id],
           plan_id: plan.id,
@@ -63,7 +78,14 @@ module DiscourseSubscriptions
           expires_at: expires_at
         )
 
+        if new_subscription.save
+          Rails.logger.warn("[SUBS DEBUG] Successfully saved new subscription record: #{new_subscription.id}")
+        else
+          Rails.logger.error("[SUBS DEBUG] FAILED to save subscription record. Errors: #{new_subscription.errors.full_messages.join(', ')}")
+        end
+
         group&.add(user)
+        Rails.logger.warn("[SUBS DEBUG] Added user to group. Process complete.")
 
       when "customer.subscription.updated"
         subscription = event[:data][:object]
@@ -150,7 +172,7 @@ module DiscourseSubscriptions
 
           subscribe_controller = DiscourseSubscriptions::SubscribeController.new
           subscribe_controller.instance_variable_set(:@current_user, user)
-          subscribe_controller.send(:finalize_discourse_subscription, transaction, plan)
+          subscribe_controller.send(:finalize_discourse_subscription, transaction, plan, 'Razorpay')
         else
           Rails.logger.error("Razorpay webhook error: Could not find User(#{notes['user_id']}) or Plan(#{notes['plan_id']})")
         end
