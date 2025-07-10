@@ -131,7 +131,10 @@ module DiscourseSubscriptions
             customer: "cus_manual_#{user.id}"
           }
 
-          finalize_discourse_subscription(transaction, plan, user, params[:duration])
+          # We need to instantiate the controller to use the method
+          subscribe_controller = DiscourseSubscriptions::SubscribeController.new
+          subscribe_controller.send(:finalize_discourse_subscription, transaction, plan, user, params[:duration], 'manual')
+
           render json: success_json
 
         rescue ActiveRecord::RecordInvalid => e

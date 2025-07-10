@@ -161,7 +161,7 @@ module DiscourseSubscriptions
             id: params[:razorpay_payment_id],
             customer: "cus_razorpay_#{current_user.id}"
           }
-          finalize_discourse_subscription(transaction, plan)
+          finalize_discourse_subscription(transaction, plan, current_user, nil, 'Razorpay')
           render json: success_json
         else
           render_json_error(I18n.t("discourse_subscriptions.card.declined"))
@@ -179,24 +179,17 @@ module DiscourseSubscriptions
 
 
     private
-    def finalize_discourse_subscription(transaction, plan)
-      provider_name = SiteSetting.discourse_subscriptions_payment_provider
-
+    def finalize_discourse_subscription(transaction, plan, user, duration_in_days = nil, provider = nil)
       group_name = plan.metadata.group_name if plan.metadata
       if group_name.present?
         group = ::Group.find_by(name: group_name)
-        group&.add(current_user)
+        group&.add(user)
       end
 
-      # --- START OF NEW LOGIC ---
-      # Read the duration from the plan's metadata
-      duration = plan.metadata.duration.to_i if plan.metadata&.duration
-
-      # If a valid duration exists, calculate the expiry date
+      duration = duration_in_days || (plan.metadata.duration.to_i if plan.metadata&.duration)
       expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
-      # --- END OF NEW LOGIC ---
 
-      customer = ::DiscourseSubscriptions::Customer.find_or_create_by!(user_id: current_user.id) do |c|
+      customer = ::DiscourseSubscriptions::Customer.find_or_create_by!(user_id: user.id) do |c|
         c.customer_id = transaction[:customer]
       end
 
@@ -209,10 +202,10 @@ module DiscourseSubscriptions
         customer_id: customer.id,
         external_id: transaction[:id],
         status: "active",
-        provider: provider_name,
+        provider: provider || SiteSetting.discourse_subscriptions_payment_provider,
         plan_id: plan.id,
-        duration: duration,     # Save the duration
-        expires_at: expires_at  # Save the calculated expiry date
+        duration: duration,
+        expires_at: expires_at
       )
     end
 
