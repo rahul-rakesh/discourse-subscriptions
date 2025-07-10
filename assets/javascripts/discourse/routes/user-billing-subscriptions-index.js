@@ -10,9 +10,15 @@ export default class UserBillingSubscriptionsIndexRoute extends Route {
   @service router;
 
   model() {
-    return UserSubscription.findAll().then((result) =>
-        result.map((sub) => UserSubscription.create(sub))
-    );
+    console.log("[SUBS DEBUG] Frontend: Fetching subscriptions from server...");
+    return UserSubscription.findAll().then((result) => {
+      console.log("[SUBS DEBUG] Frontend: Received data from server:", result);
+      if (Array.isArray(result)) {
+        return result.map((sub) => UserSubscription.create(sub));
+      }
+      console.error("[SUBS DEBUG] Frontend: Server response is NOT an array.", result);
+      return []; // Return empty array on failure to prevent crash
+    });
   }
 
   @action
@@ -22,17 +28,26 @@ export default class UserBillingSubscriptionsIndexRoute extends Route {
           "discourse_subscriptions.user.subscriptions.operations.destroy.confirm"
       ),
       didConfirm: () => {
+        console.log("[SUBS DEBUG] Frontend: 'Cancel' confirmed for subscription:", subscription.id);
         subscription.set("loading", true);
         subscription.destroy()
             .then(updatedSubscription => {
-              // Update the existing model with the new data from the server
-              subscription.setProperties({
+              console.log("[SUBS DEBUG] Frontend: 'destroy' promise resolved. Data from server:", updatedSubscription);
+
+              // This is the object with the new status and date
+              const newProperties = {
                 status: updatedSubscription.status,
                 renews_at: updatedSubscription.renews_at
-              });
+              };
+
+              console.log("[SUBS DEBUG] Frontend: Updating model properties with:", newProperties);
+              subscription.setProperties(newProperties);
             })
             .catch(popupAjaxError)
-            .finally(() => subscription.set("loading", false));
+            .finally(() => {
+              console.log("[SUBS DEBUG] Frontend: 'finally' block. Setting loading to false.");
+              subscription.set("loading", false)
+            });
       },
     });
   }
