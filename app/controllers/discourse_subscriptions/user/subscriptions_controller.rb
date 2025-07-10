@@ -39,11 +39,9 @@ module DiscourseSubscriptions
             next unless plan
 
             renews_at_timestamp = nil
-            # START OF FIX: Use hash syntax `plan[:recurring]` instead of method `plan.recurring`
             if sub.provider == 'Stripe' && sub.status == 'active' && plan[:recurring] && sub.external_id.start_with?("sub_")
               renews_at_timestamp = ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end
             end
-            # END OF FIX
 
             {
               id: sub.external_id,
@@ -70,7 +68,7 @@ module DiscourseSubscriptions
           subscription = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
           if subscription
             local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
-            local_sub&.update(status: subscription.status)
+            local_sub&.update(status: 'canceled') # Set status to 'canceled'
             render json: subscription
           else
             render_json_error I18n.t("discourse_subscriptions.customer_not_found")
