@@ -21,66 +21,99 @@ module DiscourseSubscriptions
         webhook_secret = SiteSetting.discourse_subscriptions_webhook_secret
         event = ::Stripe::Webhook.construct_event(payload, sig_header, webhook_secret)
       rescue JSON::ParserError => e
+        Rails.logger.error("[SUBS DEBUG] JSON Parser Error: #{e.message}")
         return render_json_error e.message
       rescue ::Stripe::SignatureVerificationError => e
+        Rails.logger.error("[SUBS DEBUG] Signature Verification Error: #{e.message}")
         return render_json_error e.message
       end
 
-      # FULL PAYLOAD LOGGING
-      Rails.logger.warn("[SUBS DATA] Full webhook payload: #{event.to_json}")
+      # Log the entire payload for inspection
+      Rails.logger.warn("[SUBS DEBUG] Full event payload: #{event.to_json}")
 
       case event[:type]
       when "checkout.session.completed"
         checkout_session = event[:data][:object]
+        Rails.logger.warn("[SUBS DEBUG] Processing checkout.session.completed. Payment Status: #{checkout_session[:payment_status]}")
 
         if checkout_session[:payment_status] != "paid"
+          Rails.logger.warn("[SUBS DEBUG] Exiting because payment_status is not 'paid'.")
           return head 200
         end
 
-        # ROBUST EMAIL LOOKUP
-        email = checkout_session.customer_details&.email || checkout_session.customer&.email
+        email = checkout_session[:customer_details][:email]
+        Rails.logger.warn("[SUBS DEBUG] Attempting to find email. Found: #{email}")
         return render_json_error "customer email not found in webhook" if email.blank?
 
         user = ::User.find_by_username_or_email(email)
         return render_json_error "user not found" if !user
+        Rails.logger.warn("[SUBS DEBUG] Found user: #{user.username}")
 
-        line_items = ::Stripe::Checkout::Session.list_line_items(checkout_session[:id], { limit: 1 })
-        item = line_items[:data].first
-        plan = item[:price]
+        begin
+          line_items = ::Stripe::Checkout::Session.list_line_items(checkout_session[:id], { limit: 1 })
+          item = line_items[:data].first
+          plan = item[:price]
+          Rails.logger.warn("[SUBS DEBUG] Successfully retrieved plan object from line items: #{plan[:id]}")
+        rescue => e
+          Rails.logger.error("[SUBS DEBUG] FAILED to retrieve line items or plan. Error: #{e.message}")
+          return head 200
+        end
+
         group = plan_group(plan)
+        Rails.logger.warn("[SUBS DEBUG] Group from plan metadata: #{group&.name || 'None'}")
 
-        stripe_customer_id = checkout_session.customer || "cus_#{user.id}_#{SecureRandom.hex(8)}"
+        stripe_customer_id = checkout_session[:customer] || "cus_#{user.id}_#{SecureRandom.hex(8)}"
+        Rails.logger.warn("[SUBS DEBUG] Using Stripe customer ID: #{stripe_customer_id}")
+
         discourse_customer = Customer.find_or_create_by!(user_id: user.id) do |c|
           c.customer_id = stripe_customer_id
         end
+        Rails.logger.warn("[SUBS DEBUG] Created/found local customer record: #{discourse_customer.id}")
 
-        duration = plan.metadata&.duration&.to_i
+        metadata = plan[:metadata]
+        Rails.logger.warn("[SUBS DEBUG] Plan metadata object class: #{metadata.class}")
+        Rails.logger.warn("[SUBS DEBUG] Plan metadata content: #{metadata.to_json}")
+
+        duration = metadata[:duration]&.to_i
+        Rails.logger.warn("[SUBS DEBUG] Calculated duration: #{duration || 'nil'}")
+
         expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
+        Rails.logger.warn("[SUBS DEBUG] Calculated expires_at: #{expires_at || 'nil'}")
 
-        Subscription.create!(
+        external_id = checkout_session[:subscription] || checkout_session[:id]
+        Rails.logger.warn("[SUBS DEBUG] Using external_id: #{external_id}")
+
+        new_subscription = Subscription.new(
           customer_id: discourse_customer.id,
-          external_id: checkout_session[:subscription] || checkout_session[:id],
-          plan_id: plan.id,
+          external_id: external_id,
+          plan_id: plan[:id],
           provider: 'Stripe',
           status: 'active',
           duration: duration,
           expires_at: expires_at
         )
 
+        if new_subscription.save
+          Rails.logger.warn("[SUBS DEBUG] Successfully saved new subscription record: #{new_subscription.id}")
+        else
+          Rails.logger.error("[SUBS DEBUG] FAILED to save subscription record. Errors: #{new_subscription.errors.full_messages.join(', ')}")
+        end
+
         group&.add(user)
+        Rails.logger.warn("[SUBS DEBUG] Process complete.")
 
       when "customer.subscription.updated"
         subscription = event[:data][:object]
         status = subscription[:status]
-        return head 200 if !%w[complete active].include?(status)
+        return head 200 if !%w[active trialing].include?(status)
 
-        price = subscription.items.data[0].price
+        price = subscription[:items][:data][0][:price]
         return head 200 unless price
 
-        customer = find_active_customer(subscription.customer, price.product)
+        customer = find_active_customer(subscription[:customer], price[:product])
         return render_json_error "customer not found" if !customer
 
-        update_status(customer.id, subscription.id, status)
+        update_status(customer.id, subscription[:id], status)
 
         user = ::User.find_by(id: customer.user_id)
         return render_json_error "user not found" if !user
@@ -95,10 +128,10 @@ module DiscourseSubscriptions
         local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: subscription.id)
         return head 200 unless local_sub
 
-        price = subscription.items.data[0].price
+        price = subscription[:items][:data][0][:price]
         return head 200 unless price
 
-        customer = find_active_customer(subscription.customer, price.product)
+        customer = find_active_customer(subscription[:customer], price[:product])
         return render_json_error "customer not found" if !customer
 
         update_status(customer.id, subscription.id, subscription.status)
