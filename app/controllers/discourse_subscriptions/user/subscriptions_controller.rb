@@ -18,8 +18,6 @@ module DiscourseSubscriptions
                                   .where(users: { id: current_user.id })
                                   .order(created_at: :desc)
 
-          return render json: [] if local_subscriptions.empty?
-
           processed_subscriptions = local_subscriptions.map do |sub|
             # Default values
             plan_nickname = "N/A"
@@ -28,10 +26,10 @@ module DiscourseSubscriptions
             status = sub.status
             unit_amount = nil
             currency = nil
+            plan_type = 'one_time'
 
-            # START OF FIX: This condition now handles old subscriptions where provider is nil
+            # For any Stripe subscription, get the latest details directly from Stripe
             if (sub.provider == 'Stripe' || sub.provider.nil?) && sub.external_id.start_with?('sub_') && is_stripe_configured?
-              # END OF FIX
               begin
                 stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
                 price = stripe_sub.items.data[0].price
@@ -44,12 +42,18 @@ module DiscourseSubscriptions
 
                 sub.update(status: status) if sub.status != status
 
-                renews_at = stripe_sub.cancel_at_period_end ? stripe_sub.canceled_at : stripe_sub.current_period_end
+                if stripe_sub.cancel_at_period_end
+                  status = 'canceled'
+                  renews_at = stripe_sub.current_period_end
+                else
+                  renews_at = stripe_sub.current_period_end
+                end
 
+                plan_type = price.type
               rescue ::Stripe::InvalidRequestError
                 status = 'not_in_stripe'
               end
-            elsif sub.expires_at.present?
+            elsif sub.expires_at.present? # For one-time payments (Razorpay, Manual)
               renews_at = sub.expires_at.to_i
             end
 
@@ -61,7 +65,8 @@ module DiscourseSubscriptions
               product_name: product_name,
               renews_at: renews_at,
               unit_amount: unit_amount,
-              currency: currency
+              currency: currency,
+              plan_type: plan_type
             }
           end.compact
 
@@ -83,7 +88,8 @@ module DiscourseSubscriptions
             render json: {
               id: stripe_sub.id,
               status: 'canceled',
-              renews_at: stripe_sub.current_period_end
+              renews_at: stripe_sub.current_period_end,
+              plan_type: 'recurring'
             }
           else
             render_json_error I18n.t("discourse_subscriptions.customer_not_found")

@@ -10,26 +10,25 @@ export default class UserBillingSubscriptionsIndexRoute extends Route {
   @service router;
 
   model() {
-    // The model now returns a single, unified list from our refactored controller
-    return UserSubscription.findAll().then((result) => {
-      // We still map to the Ember model to use its helpers, like `amountDollars`
-      return result.map((sub) => UserSubscription.create(sub));
-    });
+    return UserSubscription.findAll();
   }
 
   @action
   cancelSubscription(subscription) {
     this.dialog.yesNoConfirm({
       message: i18n(
-        "discourse_subscriptions.user.subscriptions.operations.destroy.confirm",
+          "discourse_subscriptions.user.subscriptions.operations.destroy.confirm",
       ),
       didConfirm: () => {
         subscription.set("loading", true);
-        subscription
-          .destroy()
-          .then(() => this.refresh())
-          .catch(popupAjaxError)
-          .finally(() => subscription.set("loading", false));
+        subscription.destroy().then((result) => {
+          subscription.setProperties({
+            status: result.status,
+            renews_at: result.renews_at
+          });
+        })
+            .catch(popupAjaxError)
+            .finally(() => subscription.set("loading", false));
       },
     });
   }

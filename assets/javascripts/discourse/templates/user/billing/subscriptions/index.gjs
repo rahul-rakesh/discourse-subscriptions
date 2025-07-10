@@ -4,7 +4,7 @@ import loadingSpinner from "discourse/helpers/loading-spinner";
 import routeAction from "discourse/helpers/route-action";
 import { i18n } from "discourse-i18n";
 import formatAbsoluteDate from "discourse/plugins/discourse-subscriptions/discourse/helpers/format-absolute-date";
-import { eq, or } from "truth-helpers";
+import { and, eq, or, not } from "truth-helpers";
 
 export default RouteTemplate(
 <template>
@@ -30,21 +30,19 @@ export default RouteTemplate(
           <td>
             {{#if subscription.renews_at}}
               {{formatAbsoluteDate subscription.renews_at}}
-            {{else if subscription.expires_at}}
-              {{formatAbsoluteDate subscription.expires_at}}
             {{else}}
-              Does not expire
+              N/A
             {{/if}}
           </td>
           <td class="td-right">
             {{#if subscription.loading}}
               {{loadingSpinner size="small"}}
-            {{else if (eq subscription.provider "Stripe")}}
+            {{else if (and (eq subscription.provider "Stripe") (eq subscription.plan_type "recurring"))}}
               <DButton
-                @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
-                @action={{routeAction "cancelSubscription" subscription}}
-                @label="discourse_subscriptions.user.subscriptions.cancel"
-                class="btn-danger"
+                  @disabled={{eq subscription.status "canceled"}}
+                  @action={{routeAction "cancelSubscription" subscription}}
+                  @label="discourse_subscriptions.user.subscriptions.cancel"
+                  class="btn-danger"
               />
             {{/if}}
           </td>
