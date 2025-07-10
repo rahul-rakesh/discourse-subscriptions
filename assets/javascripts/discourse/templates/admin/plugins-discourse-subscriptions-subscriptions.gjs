@@ -18,17 +18,17 @@ export default RouteTemplate(
   {{else}}
     <div class="subscription-controls">
       <UserChooser
-        @value={{@controller.username}}
-        @onChange={{@controller.filterByUser}}
-        @maximum={{1}}
-        @placeholder="Filter by user..."
+          @value={{@controller.username}}
+          @onChange={{@controller.filterByUser}}
+          @maximum={{1}}
+          @placeholder="Filter by user..."
       />
       {{#if @controller.username}}
         <DButton
-          @action={{@controller.clearFilter}}
-          @icon="times"
-          class="btn-icon btn-clear-filter"
-          @title="Clear filter"
+            @action={{@controller.clearFilter}}
+            @icon="times"
+            class="btn-icon btn-clear-filter"
+            @title="Clear filter"
         />
       {{/if}}
     </div>
@@ -68,18 +68,19 @@ export default RouteTemplate(
                   {{loadingSpinner size="small"}}
                 {{else if (and (eq subscription.provider "Stripe") (eq subscription.plan_type "recurring"))}}
                   <DButton
-                    @disabled={{eq subscription.status "canceled"}}
-                    @label="cancel"
-                    @action={{fn @controller.showCancelModal subscription}}
-                    @icon="xmark"
+                      @disabled={{eq subscription.status "canceled"}}
+                      @label="cancel"
+                      @action={{fn @controller.showCancelModal subscription}}
+                      @icon="xmark"
                   />
-                {{else if (not (eq subscription.provider "Stripe"))}}
+                {{! START OF FIX: Add this new block for one-time Stripe and other providers }}
+                {{else if (or (not (eq subscription.provider "Stripe")) (eq subscription.plan_type "one_time"))}}
                   <DButton
-                    @disabled={{eq subscription.status "revoked"}}
-                    @label="discourse_subscriptions.admin.revoke_access"
-                    @action={{fn @controller.revokeAccess subscription}}
-                    @icon="user-slash"
-                    class="btn-danger"
+                      @disabled={{eq subscription.status "revoked"}}
+                      @label="discourse_subscriptions.admin.revoke_access"
+                      @action={{fn @controller.revokeAccess subscription}}
+                      @icon="user-slash"
+                      class="btn-danger"
                   />
                 {{/if}}
               </td>
