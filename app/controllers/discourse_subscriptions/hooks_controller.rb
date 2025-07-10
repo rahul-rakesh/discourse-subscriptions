@@ -103,23 +103,24 @@ module DiscourseSubscriptions
         Rails.logger.warn("[SUBS DEBUG] Process complete.")
 
       when "customer.subscription.updated"
-        subscription = event[:data][:object]
-        status = subscription[:status]
-        return head 200 if !%w[active trialing].include?(status)
+        subscription_data = event[:data][:object]
 
-        price = subscription[:items][:data][0][:price]
-        return head 200 unless price
+        # First, find the local subscription record by its Stripe ID.
+        local_subscription = ::DiscourseSubscriptions::Subscription.find_by(external_id: subscription_data[:id])
 
-        customer = find_active_customer(subscription[:customer], price[:product])
-        return render_json_error "customer not found" if !customer
+        # If we don't have a record of this subscription yet, do nothing.
+        # The 'checkout.session.completed' webhook is responsible for creation.
+        return head 200 unless local_subscription
 
-        update_status(customer.id, subscription[:id], status)
+        # If we do have a record, update its status.
+        local_subscription.update(status: subscription_data[:status])
 
-        user = ::User.find_by(id: customer.user_id)
-        return render_json_error "user not found" if !user
-
-        if group = plan_group(price)
-          group.add(user)
+        # If the subscription is active, ensure the user is in the correct group.
+        if local_subscription.status == 'active'
+          price = subscription_data[:items][:data][0][:price]
+          if group = plan_group(price)
+            group.add(local_subscription.customer.user)
+          end
         end
 
       when "customer.subscription.deleted"
