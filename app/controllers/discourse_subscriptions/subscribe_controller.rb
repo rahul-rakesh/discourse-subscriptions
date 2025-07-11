@@ -10,36 +10,35 @@ module DiscourseSubscriptions
     before_action :set_api_key
     requires_login except: %i[index contributors show]
 
-    # In app/controllers/discourse_subscriptions/subscribe_controller.rb
-
     def index
       begin
         products = []
         if is_stripe_configured?
-          # Fetch all products from our local database
           local_products = ::DiscourseSubscriptions::Product.all
+          user_products = current_user_products
 
           local_products.each do |p|
             begin
               product_data = ::Stripe::Product.retrieve(p.external_id)
               next unless product_data.active
 
-              # FIX: Fetch plans specifically for this product_data.id
-              # This is more reliable than fetching all plans at once.
               product_plans_data = ::Stripe::Price.list(
                 product: product_data.id,
                 active: true,
-                limit: 100 # It's rare for a single product to have > 100 prices
+                limit: 100
               )
+
+              is_subscribed = user_products.include?(product_data.id)
+              is_repurchaseable = product_data.metadata[:repurchaseable] == "true"
 
               products << {
                 id: product_data.id,
                 name: product_data.name,
                 description: PrettyText.cook(product_data.description || product_data.metadata[:description]),
-                subscribed: current_user_products.include?(product_data.id),
-                repurchaseable: product_data.metadata[:repurchaseable],
-                metadata: product_data.metadata.to_h, # Pass all metadata
-                plans: serialize_plans(product_plans_data) # Use the fetched plans
+                subscribed: is_subscribed && !is_repurchaseable,
+                repurchaseable: is_repurchaseable,
+                metadata: product_data.metadata.to_h,
+                plans: serialize_plans(product_plans_data)
               }
             rescue ::Stripe::InvalidRequestError => e
               Rails.logger.warn("[Subscriptions] Could not retrieve Stripe product with ID #{p.external_id}: #{e.message}")
@@ -47,9 +46,7 @@ module DiscourseSubscriptions
             end
           end
         end
-
         render_json_dump products.sort_by { |p| p[:name] }
-
       rescue ::Stripe::InvalidRequestError => e
         render_json_error e.message
       end
@@ -80,75 +77,34 @@ module DiscourseSubscriptions
       end
     end
 
-    # app/controllers/discourse_subscriptions/subscribe_controller.rb
-
-    # app/controllers/discourse_subscriptions/subscribe_controller.rb
-
     def create
       params.require(:plan)
       begin
         plan = ::Stripe::Price.retrieve(params[:plan])
 
         if SiteSetting.discourse_subscriptions_payment_provider == "Razorpay"
-
-          # Add this check to prevent recurring payments
           if plan.type == 'recurring'
-            return render_json_error(I18n.t("discourse_subscriptions.razorpay.recurring_not_supported"))
+            return render_json_error(I18n.t("js.discourse_subscriptions.razorpay.recurring_not_supported"))
           end
-
-          notes = {
-            user_id: current_user.id,
-            username: current_user.username,
-            plan_id: plan.id
-          }
-          order = DiscourseSubscriptions::Providers::RazorpayProvider.create_order(
-            plan[:unit_amount],
-            plan[:currency].upcase,
-            notes
-          )
+          notes = { user_id: current_user.id, username: current_user.username, plan_id: plan.id }
+          order = DiscourseSubscriptions::Providers::RazorpayProvider.create_order(plan[:unit_amount], plan[:currency].upcase, notes)
           render_json_dump order
-
-        else # Stripe Logic
-
-          # --- START OF FIX ---
-          # Determine the correct mode for Stripe Checkout based on the plan's type.
+        else
           mode = plan.type == 'recurring' ? 'subscription' : 'payment'
-          # --- END OF FIX ---
-
           success_url = "#{Discourse.base_url}/u/#{current_user.username_lower}/billing/subscriptions?checkout=success"
           cancel_url = "#{Discourse.base_url}/s?checkout=cancel"
-
           session = ::Stripe::Checkout::Session.create(
             customer_email: current_user.email,
             payment_method_types: ['card'],
-            line_items: [{
-                           price: plan.id,
-                           quantity: 1,
-                         }],
-            mode: mode, # Use the corrected mode variable here
+            line_items: [{ price: plan.id, quantity: 1 }],
+            mode: mode,
             success_url: success_url,
             cancel_url: cancel_url,
             metadata: metadata_user
           )
-
           render json: { session_id: session.id }
         end
-
-      rescue ::Stripe::InvalidRequestError => e
-        render_json_error e.message
-      rescue ::Razorpay::Error => e
-        render_json_error e.message
-      end
-    end
-
-    def finalize
-      params.require(%i[plan transaction])
-      begin
-        price = ::Stripe::Price.retrieve(params[:plan])
-        transaction = retrieve_transaction(params[:transaction])
-        finalize_transaction(transaction, price) if transaction_ok(transaction)
-        render_json_dump params[:transaction]
-      rescue ::Stripe::InvalidRequestError => e
+      rescue ::Stripe::InvalidRequestError, ::Razorpay::Error => e
         render_json_error e.message
       end
     end
@@ -156,58 +112,36 @@ module DiscourseSubscriptions
     def finalize_razorpay_payment
       params.require(%i[plan_id razorpay_payment_id razorpay_order_id razorpay_signature])
       begin
-        is_valid = DiscourseSubscriptions::Providers::RazorpayProvider.verify_payment(
-          params[:razorpay_payment_id],
-          params[:razorpay_order_id],
-          params[:razorpay_signature],
-          )
-        if is_valid
+        if DiscourseSubscriptions::Providers::RazorpayProvider.verify_payment(params[:razorpay_payment_id], params[:razorpay_order_id], params[:razorpay_signature])
           plan = ::Stripe::Price.retrieve(params[:plan_id])
-          transaction = {
-            id: params[:razorpay_payment_id],
-            customer: "cus_razorpay_#{current_user.id}"
-          }
+          transaction = { id: params[:razorpay_payment_id], customer: "cus_razorpay_#{current_user.id}" }
           finalize_discourse_subscription(transaction, plan, current_user, nil, 'Razorpay')
           render json: success_json
         else
           render_json_error(I18n.t("discourse_subscriptions.card.declined"))
         end
-      rescue ::Razorpay::Error => e
-        render_json_error(e.message)
-      rescue ::Stripe::InvalidRequestError => e
+      rescue ::Razorpay::Error, ::Stripe::InvalidRequestError => e
         render_json_error(e.message)
       end
     end
 
-    def finalize_transaction(transaction, plan)
-      finalize_discourse_subscription(transaction, plan)
-    end
-
-
-    private
     private
 
     def finalize_discourse_subscription(transaction, plan, user, duration_in_days = nil, provider = nil)
-      group_name = plan.metadata.group_name if plan.metadata
-      if group_name.present?
-        group = ::Group.find_by(name: group_name)
-        group&.add(user)
-      end
+      group_name = plan[:metadata][:group_name]
+      group = ::Group.find_by_name(group_name) if group_name.present?
+      group&.add(user)
 
-      # FIX: Convert duration_in_days to an integer at the start
-      duration = duration_in_days.present? ? duration_in_days.to_i : nil
-      duration ||= plan.metadata.duration.to_i if plan.metadata&.duration
-
+      duration = duration_in_days || plan[:metadata][:duration]&.to_i
       expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
 
+      # Use a single find_or_create_by call for the customer
       customer = ::DiscourseSubscriptions::Customer.find_or_create_by!(user_id: user.id) do |c|
         c.customer_id = transaction[:customer]
       end
 
-      customer.update!(
-        customer_id: transaction[:customer],
-        product_id: plan.product
-      )
+      # Update the customer_id in case it's different (e.g. for existing customers)
+      customer.update!(customer_id: transaction[:customer])
 
       ::DiscourseSubscriptions::Subscription.create!(
         customer_id: customer.id,
@@ -220,6 +154,26 @@ module DiscourseSubscriptions
       )
     end
 
+    def current_user_products
+      return [] if current_user.nil?
+
+      user_subs = ::DiscourseSubscriptions::Subscription.joins(:customer).where(discourse_subscriptions_customers: { user_id: current_user.id }, status: 'active').where("expires_at IS NULL OR expires_at > ?", Time.zone.now)
+
+      return [] if user_subs.empty?
+
+      plan_ids = user_subs.pluck(:plan_id).uniq
+
+      if is_stripe_configured?
+        all_plans = ::Stripe::Price.list(limit: 100, active: true)
+        return plan_ids.map do |plan_id|
+          plan = all_plans.data.find { |p| p.id == plan_id }
+          plan[:product] if plan
+        end.compact
+      end
+
+      []
+    end
+
     def serialize_product(product)
       {
         id: product[:id],
@@ -230,93 +184,16 @@ module DiscourseSubscriptions
       }
     end
 
-    def current_user_products
-      return [] if current_user.nil?
-      Customer
-        .joins(:subscriptions)
-        .where(user_id: current_user.id)
-        .where(
-          Subscription.arel_table[:status].eq(nil).or(
-            Subscription.arel_table[:status].not_eq("canceled"),
-            ),
-          )
-        .select(:product_id)
-        .distinct
-        .pluck(:product_id)
-    end
-
     def serialize_plans(plans)
       plans[:data]
         .map do |plan|
-        # Only include plans that have a price greater than 0
         next if plan.unit_amount.to_i == 0
-
-        {
-          id: plan.id,
-          unit_amount: plan.unit_amount,
-          currency: plan.currency,
-          type: plan.type,
-          recurring: plan.recurring,
-          nickname: plan.nickname,
-          metadata: plan.metadata.to_h
-        }
-      end
-        .compact # Remove any nil values created by the 'next' keyword
-        .sort_by { |plan| plan[:unit_amount] }
-    end
-
-    def find_or_create_customer(source, cardholder_name = nil, cardholder_address = nil)
-      customer = Customer.find_by_user_id(current_user.id)
-      cardholder_address =
-        (
-          if cardholder_address.present?
-            {
-              line1: cardholder_address[:line1],
-              city: cardholder_address[:city],
-              state: cardholder_address[:state],
-              country: cardholder_address[:country],
-              postal_code: cardholder_address[:postalCode],
-            }
-          else
-            nil
-          end
-        )
-      if customer.present?
-        ::Stripe::Customer.retrieve(customer.customer_id)
-      else
-        ::Stripe::Customer.create(
-          email: current_user.email,
-          source: source,
-          name: cardholder_name,
-          address: cardholder_address,
-          )
-      end
-    end
-
-    def retrieve_payment_intent(invoice_id)
-      invoice = ::Stripe::Invoice.retrieve(invoice_id)
-      ::Stripe::PaymentIntent.retrieve(invoice[:payment_intent])
-    end
-
-    def retrieve_transaction(transaction)
-      begin
-        case transaction
-        when /^sub_/
-          ::Stripe::Subscription.retrieve(transaction)
-        when /^in_/
-          ::Stripe::Invoice.retrieve(transaction)
-        end
-      rescue ::Stripe::InvalidRequestError => e
-        e.message
-      end
+        { id: plan.id, unit_amount: plan.unit_amount, currency: plan.currency, type: plan.type, recurring: plan.recurring, nickname: plan.nickname, metadata: plan.metadata.to_h }
+      end.compact.sort_by { |plan| plan[:unit_amount] }
     end
 
     def metadata_user
       { user_id: current_user.id, username: current_user.username_lower }
-    end
-
-    def transaction_ok(transaction)
-      %w[active trialing paid].include?(transaction[:status])
     end
   end
 end
