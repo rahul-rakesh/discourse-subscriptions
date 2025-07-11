@@ -21,7 +21,7 @@ export default RouteTemplate(
       </thead>
       <tbody>
       {{#each @controller.model as |subscription|}}
-        <tr class="subscription-row {{subscription.status}}">
+        <tr class="subscription-row {{subscription.status}} {{if (eq subscription.status "revoked") "revoked-subscription"}}">
           <td>{{subscription.product_name}}</td>
           <td>{{subscription.plan_nickname}}</td>
           <td>{{subscription.amountDollars}}</td>
@@ -39,7 +39,7 @@ export default RouteTemplate(
               {{loadingSpinner size="small"}}
             {{else if (and (eq subscription.provider "Stripe") (eq subscription.plan_type "recurring"))}}
               <DButton
-                  @disabled={{eq subscription.status "canceled"}}
+                  @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
                   @action={{routeAction "cancelSubscription" subscription}}
                   @label="discourse_subscriptions.user.subscriptions.cancel"
                   class="btn-danger"
