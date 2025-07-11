@@ -1,5 +1,5 @@
 import { fn } from "@ember/helper";
-import { eq } from "truth-helpers";
+import { and, eq, not, or } from "truth-helpers";
 import { LinkTo } from "@ember/routing";
 import RouteTemplate from "ember-route-template";
 import DButton from "discourse/components/d-button";
@@ -18,17 +18,17 @@ export default RouteTemplate(
   {{else}}
     <div class="subscription-controls">
       <UserChooser
-        @value={{@controller.username}}
-        @onChange={{@controller.filterByUser}}
-        @maximum={{1}}
-        @placeholder="Filter by user..."
+          @value={{@controller.username}}
+          @onChange={{@controller.filterByUser}}
+          @maximum={{1}}
+          @placeholder="Filter by user..."
       />
       {{#if @controller.username}}
         <DButton
-          @action={{@controller.clearFilter}}
-          @icon="times"
-          class="btn-icon btn-clear-filter"
-          @title="Clear filter"
+            @action={{@controller.clearFilter}}
+            @icon="times"
+            class="btn-icon btn-clear-filter"
+            @title="Clear filter"
         />
       {{/if}}
     </div>
@@ -66,20 +66,20 @@ export default RouteTemplate(
               <td class="td-right">
                 {{#if subscription.loading}}
                   {{loadingSpinner size="small"}}
-                {{else if (eq subscription.provider "Stripe")}}
+                {{else if (and (eq subscription.provider "Stripe") (eq subscription.plan_type "recurring"))}}
                   <DButton
-                    @disabled={{eq subscription.status "canceled"}}
-                    @label="cancel"
-                    @action={{fn @controller.showCancelModal subscription}}
-                    @icon="xmark"
+                      @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
+                      @label="cancel"
+                      @action={{fn @controller.showCancelModal subscription}}
+                      @icon="xmark"
                   />
-                {{else}}
+                {{else if (or (not (eq subscription.provider "Stripe")) (eq subscription.plan_type "one_time"))}}
                   <DButton
-                    @disabled={{eq subscription.status "revoked"}}
-                    @label="discourse_subscriptions.admin.revoke_access"
-                    @action={{fn @controller.revokeAccess subscription}}
-                    @icon="user-slash"
-                    class="btn-danger"
+                      @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
+                      @label="discourse_subscriptions.admin.revoke_access"
+                      @action={{fn @controller.revokeAccess subscription}}
+                      @icon="user-slash"
+                      class="btn-danger"
                   />
                 {{/if}}
               </td>

@@ -11,65 +11,87 @@ module DiscourseSubscriptions
       before_action :set_api_key
       requires_login
 
-      # app/controllers/discourse_subscriptions/user/subscriptions_controller.rb
-
       def index
         begin
-          # --- START OF SECURITY FIX ---
-          # This query now explicitly joins through the `customer` to the `user`
-          # and filters on the `users` table. This is a more robust and secure
-          # way to ensure we only fetch subscriptions for the current user.
           local_subscriptions = ::DiscourseSubscriptions::Subscription
                                   .joins(customer: :user)
                                   .where(users: { id: current_user.id })
                                   .order(created_at: :desc)
-          # --- END OF SECURITY FIX ---
-
-          return render json: [] if local_subscriptions.empty?
-
-          all_plans = is_stripe_configured? ? ::Stripe::Price.list(limit: 100, active: true, expand: ['data.product']) : []
 
           processed_subscriptions = local_subscriptions.map do |sub|
-            plan = all_plans.find { |p| p.id == sub.plan_id } if sub.plan_id
+            plan_nickname = "N/A"
+            product_name = "N/A"
+            renews_at = nil
+            status = sub.status
+            unit_amount = nil
+            currency = nil
+            plan_type = 'one_time'
+            plan = nil
 
-            if plan.nil? && (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
+            if (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
               begin
-                stripe_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['items.data.price.product'] })
-                plan = stripe_sub&.items&.data&.first&.price
+                if sub.external_id.start_with?('sub_')
+                  stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
+                  plan = stripe_sub.items.data[0].price
+                  status = stripe_sub.status
+                  if stripe_sub.cancel_at_period_end
+                    status = 'canceled'
+                  end
+                  renews_at = stripe_sub.current_period_end
+                elsif sub.expires_at
+                  renews_at = sub.expires_at.to_i
+                  plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
+                end
               rescue ::Stripe::InvalidRequestError
-                next
+                status = 'not_in_stripe'
               end
+            elsif sub.expires_at.present?
+              renews_at = sub.expires_at.to_i
+              plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil if is_stripe_configured?
             end
 
-            next unless plan
-
-            renews_at_timestamp = (sub.provider == 'Stripe' && sub.status == 'active' && plan.recurring) ? ::Stripe::Subscription.retrieve(sub.external_id)&.current_period_end : nil
+            if plan
+              plan_nickname = plan[:nickname]
+              product_name = plan[:product]&.name
+              unit_amount = plan[:unit_amount]
+              currency = plan[:currency]
+              plan_type = plan[:type]
+            end
 
             {
               id: sub.external_id,
               provider: (sub.provider || 'Stripe').capitalize,
-              status: sub.status,
-              plan_nickname: plan.nickname,
-              product_name: plan.product&.name,
-              renews_at: renews_at_timestamp,
-              expires_at: sub.expires_at&.to_i,
-              unit_amount: plan.unit_amount,
-              currency: plan.currency
+              status: status,
+              plan_nickname: plan_nickname,
+              product_name: product_name,
+              renews_at: renews_at,
+              unit_amount: unit_amount,
+              currency: currency,
+              plan_type: plan_type
             }
           end.compact
 
-          render_json_dump processed_subscriptions
+          render json: { subscriptions: processed_subscriptions }
 
-        rescue ::Stripe::InvalidRequestError => e
-          render_json_error e.message
+        rescue => e
+          Rails.logger.error("Error fetching user subscriptions: #{e.class} #{e.message}\n#{e.backtrace.join("\n")}")
+          render_json_error(e)
         end
       end
 
       def destroy
         begin
-          subscription = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
-          if subscription
-            render_json_dump subscription
+          stripe_sub = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
+
+          if stripe_sub
+            local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
+            local_sub&.update(status: 'canceled')
+
+            render json: {
+              id: stripe_sub.id,
+              status: 'canceled',
+              renews_at: stripe_sub.current_period_end
+            }
           else
             render_json_error I18n.t("discourse_subscriptions.customer_not_found")
           end

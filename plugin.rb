@@ -36,7 +36,27 @@ register_html_builder("server:before-head-close") do |controller|
 end
 
 extend_content_security_policy(
-  script_src: %w[https://js.stripe.com/v3/ https://hooks.stripe.com https://checkout.razorpay.com]
+  script_src: %w[
+    https://js.stripe.com/v3/
+    https://hooks.stripe.com
+    https://checkout.razorpay.com
+    https://checkout.stripe.com
+    https://*.hcaptcha.com
+    https://hcaptcha.com
+    https://m.stripe.network
+    https://b.stripecdn.com
+  ],
+  frame_src: %w[
+    https://js.stripe.com/v3/
+    https://hooks.stripe.com
+    https://*.hcaptcha.com
+    https://hcaptcha.com
+    https://b.stripecdn.com
+  ],
+  connect_src: %w[
+    https://api.stripe.com
+    https://checkout.stripe.com
+  ]
 )
 
 add_admin_route "discourse_subscriptions.admin_navigation", "discourse-subscriptions.products"
@@ -79,7 +99,7 @@ require_relative "app/controllers/concerns/group"
 
 after_initialize do
   require_relative "lib/discourse_subscriptions/providers/razorpay_provider"
-
+  require "razorpay"
   ::Stripe.api_version = "2024-04-10"
 
   ::Stripe.set_app_info(

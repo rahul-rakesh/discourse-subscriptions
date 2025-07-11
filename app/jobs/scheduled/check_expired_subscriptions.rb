@@ -7,8 +7,6 @@ module ::Jobs
     def execute(args)
       return unless SiteSetting.discourse_subscriptions_enabled
 
-      # Find all subscriptions that have an expiry date in the past
-      # and are still marked as 'active'
       expired_subscriptions = ::DiscourseSubscriptions::Subscription
                                 .where(status: 'active')
                                 .where.not(expires_at: nil)
@@ -16,25 +14,22 @@ module ::Jobs
 
       return if expired_subscriptions.empty?
 
-      # We need to get all the plan details from Stripe
-      all_plans = ::Stripe::Price.list(limit: 100, active: true)
-
       expired_subscriptions.each do |sub|
         begin
           user = sub.customer&.user
-          plan = all_plans.find { |p| p.id == sub.plan_id }
+          next unless user && sub.plan_id
 
-          if user && plan
-            group_name = plan.metadata&.group_name
-            group = ::Group.find_by_name(group_name) if group_name.present?
+          plan = ::Stripe::Price.retrieve(sub.plan_id) rescue nil
+          next unless plan
 
-            if group
-              Rails.logger.info("[Subscriptions] Expiring user #{user.username} from group #{group.name} for subscription #{sub.external_id}")
-              group.remove(user)
-            end
+          group_name = plan.metadata&.group_name
+          group = ::Group.find_by_name(group_name) if group_name.present?
+
+          if group
+            Rails.logger.info("[Subscriptions] Expiring user #{user.username} from group #{group.name} for subscription #{sub.external_id}")
+            group.remove(user)
           end
 
-          # Mark the subscription as expired so we don't process it again
           sub.update(status: 'expired')
 
         rescue => e
