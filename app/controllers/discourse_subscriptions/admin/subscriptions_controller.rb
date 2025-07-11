@@ -38,25 +38,28 @@ module DiscourseSubscriptions
             unit_amount = nil
             currency = nil
             plan_type = 'one_time'
+            plan = nil
 
             if (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
               begin
                 plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
-
                 if sub.external_id.start_with?('sub_')
                   stripe_sub = ::Stripe::Subscription.retrieve(sub.external_id)
                   status = stripe_sub.status
-                  renews_at = stripe_sub.cancel_at_period_end ? stripe_sub.canceled_at : stripe_sub.current_period_end
+                  if stripe_sub.cancel_at_period_end
+                    status = 'canceled'
+                  end
+                  renews_at = stripe_sub.current_period_end
                   plan_type = stripe_sub.items.data[0].price.type
                 elsif sub.expires_at
                   renews_at = sub.expires_at.to_i
                 end
-
               rescue ::Stripe::InvalidRequestError
                 status = 'not_in_stripe'
               end
             elsif sub.expires_at.present?
               renews_at = sub.expires_at.to_i
+              plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil if is_stripe_configured?
             end
 
             if plan

@@ -99,7 +99,7 @@ require_relative "app/controllers/concerns/group"
 
 after_initialize do
   require_relative "lib/discourse_subscriptions/providers/razorpay_provider"
-
+  require "razorpay"
   ::Stripe.api_version = "2024-04-10"
 
   ::Stripe.set_app_info(

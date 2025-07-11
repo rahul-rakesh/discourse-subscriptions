@@ -26,27 +26,28 @@ module DiscourseSubscriptions
             unit_amount = nil
             currency = nil
             plan_type = 'one_time'
+            plan = nil
 
             if (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
               begin
-                plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
-
                 if sub.external_id.start_with?('sub_')
-                  stripe_sub = ::Stripe::Subscription.retrieve(sub.external_id)
+                  stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
+                  plan = stripe_sub.items.data[0].price
                   status = stripe_sub.status
                   if stripe_sub.cancel_at_period_end
                     status = 'canceled'
                   end
                   renews_at = stripe_sub.current_period_end
-                  plan_type = 'recurring'
                 elsif sub.expires_at
                   renews_at = sub.expires_at.to_i
+                  plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
                 end
               rescue ::Stripe::InvalidRequestError
                 status = 'not_in_stripe'
               end
             elsif sub.expires_at.present?
               renews_at = sub.expires_at.to_i
+              plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil if is_stripe_configured?
             end
 
             if plan
@@ -54,7 +55,7 @@ module DiscourseSubscriptions
               product_name = plan[:product]&.name
               unit_amount = plan[:unit_amount]
               currency = plan[:currency]
-              plan_type ||= plan[:type]
+              plan_type = plan[:type]
             end
 
             {
