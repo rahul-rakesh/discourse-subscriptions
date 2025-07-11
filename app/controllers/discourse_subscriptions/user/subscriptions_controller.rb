@@ -30,17 +30,18 @@ module DiscourseSubscriptions
 
             if (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
               begin
+                plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
+
                 if sub.external_id.start_with?('sub_')
-                  stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
-                  plan = stripe_sub.items.data[0].price
+                  stripe_sub = ::Stripe::Subscription.retrieve(sub.external_id)
                   status = stripe_sub.status
                   if stripe_sub.cancel_at_period_end
                     status = 'canceled'
                   end
                   renews_at = stripe_sub.current_period_end
+                  plan_type = 'recurring'
                 elsif sub.expires_at
                   renews_at = sub.expires_at.to_i
-                  plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
                 end
               rescue ::Stripe::InvalidRequestError
                 status = 'not_in_stripe'
@@ -55,7 +56,7 @@ module DiscourseSubscriptions
               product_name = plan[:product]&.name
               unit_amount = plan[:unit_amount]
               currency = plan[:currency]
-              plan_type = plan[:type]
+              plan_type ||= plan[:type]
             end
 
             {
@@ -71,7 +72,8 @@ module DiscourseSubscriptions
             }
           end.compact
 
-          render json: { subscriptions: processed_subscriptions }
+          # FIX: This now renders the plain array, which the UI expects.
+          render json: processed_subscriptions
 
         rescue => e
           Rails.logger.error("Error fetching user subscriptions: #{e.class} #{e.message}\n#{e.backtrace.join("\n")}")

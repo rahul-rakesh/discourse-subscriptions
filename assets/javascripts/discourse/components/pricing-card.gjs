@@ -1,11 +1,10 @@
 import Component from "@glimmer/component";
 import { tracked } from "@glimmer/tracking";
 import { action } from "@ember/object";
-import { LinkTo } from "@ember/routing";
 import { i18n } from "discourse-i18n";
 import htmlSafe from "discourse/helpers/html-safe";
 import formatCurrency from "discourse/plugins/discourse-subscriptions/discourse/helpers/format-currency";
-import { fn, hash } from '@ember/helper';
+import { fn } from '@ember/helper';
 import { on } from '@ember/modifier';
 import { eq } from 'truth-helpers';
 import DButton from "discourse/components/d-button";
@@ -125,11 +124,19 @@ export default class PricingCard extends Component {
             </span>
           </div>
 
-          <DButton
-            @action={{fn @startCheckout @product this.selectedPlan}}
-            class="btn-primary btn-subscribe"
-            @label="discourse_subscriptions.subscribe.title"
-          />
+          {{#if @product.subscribed}}
+            <DButton
+              class="btn-primary btn-subscribe"
+              @disabled={{true}}
+              @label="discourse_subscriptions.subscribe.purchased"
+            />
+          {{else}}
+            <DButton
+              @action={{fn @startCheckout @product this.selectedPlan}}
+              class="btn-primary btn-subscribe"
+              @label="discourse_subscriptions.subscribe.title"
+            />
+          {{/if}}
         {{else}}
           <p class="no-plans-available">No plans are currently available for this product.</p>
         {{/if}}

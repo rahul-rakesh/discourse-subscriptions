@@ -79,8 +79,12 @@ module DiscourseSubscriptions
         end
         Rails.logger.warn("[SUBS DEBUG] Created/found local customer record: #{discourse_customer.id}")
 
+        # START OF FIX: This line was missing. It links the product to the customer.
+        discourse_customer.update!(product_id: plan[:product])
+        Rails.logger.warn("[SUBS DEBUG] Associated product #{plan[:product]} with customer #{discourse_customer.id}")
+        # END OF FIX
+
         metadata = plan[:metadata]
-        Rails.logger.warn("[SUBS DEBUG] Plan metadata object class: #{metadata.class}")
         Rails.logger.warn("[SUBS DEBUG] Plan metadata content: #{metadata.to_json}")
 
         duration = metadata[:duration]&.to_i
@@ -111,22 +115,24 @@ module DiscourseSubscriptions
         Rails.logger.warn("[SUBS DEBUG] Process complete.")
 
       when "customer.subscription.updated"
-        subscription = event[:data][:object]
-        local_subscription = ::DiscourseSubscriptions::Subscription.find_by(external_id: subscription.id)
+        subscription_data = event[:data][:object]
+        local_subscription = ::DiscourseSubscriptions::Subscription.find_by(external_id: subscription_data.id)
         return head 200 unless local_subscription
-
-        local_subscription.update(status: subscription.status)
+        local_subscription.update(status: subscription_data.status)
+        if local_subscription.status == 'active'
+          price = subscription_data.items.data[0].price
+          if group = plan_group(price)
+            group.add(local_subscription.customer.user)
+          end
+        end
 
       when "customer.subscription.deleted"
         subscription = event[:data][:object]
         local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: subscription.id)
         return head 200 unless local_sub
-
         local_sub.update(status: subscription.status)
-
         price = subscription[:items][:data][0][:price]
         return head 200 unless price
-
         if (group = plan_group(price)) && local_sub.customer&.user
           safely_remove_user_from_group(local_sub.customer.user, group, local_sub.id)
         end
