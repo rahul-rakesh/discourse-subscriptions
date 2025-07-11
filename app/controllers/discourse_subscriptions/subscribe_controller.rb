@@ -157,21 +157,27 @@ module DiscourseSubscriptions
     def current_user_products
       return [] if current_user.nil?
 
-      user_subs = ::DiscourseSubscriptions::Subscription.joins(:customer).where(discourse_subscriptions_customers: { user_id: current_user.id }, status: 'active').where("expires_at IS NULL OR expires_at > ?", Time.zone.now)
-
-      return [] if user_subs.empty?
+      user_subs = ::DiscourseSubscriptions::Subscription.joins(:customer)
+                                                        .where(discourse_subscriptions_customers: { user_id: current_user.id })
+                                                        .where(status: 'active')
+                                                        .where("expires_at IS NULL OR expires_at > ?", Time.zone.now)
 
       plan_ids = user_subs.pluck(:plan_id).uniq
 
-      if is_stripe_configured?
-        all_plans = ::Stripe::Price.list(limit: 100, active: true)
-        return plan_ids.map do |plan_id|
-          plan = all_plans.data.find { |p| p.id == plan_id }
-          plan[:product] if plan
-        end.compact
-      end
+      return [] if plan_ids.empty? || !is_stripe_configured?
 
-      []
+      product_ids = plan_ids.map do |plan_id|
+        begin
+          # Retrieve the plan directly from Stripe, regardless of its active status
+          plan = ::Stripe::Price.retrieve(plan_id)
+          plan[:product] # Return the product_id from the plan
+        rescue ::Stripe::InvalidRequestError => e
+          # This plan might have been deleted in Stripe, so we ignore it.
+          nil
+        end
+      end.compact.uniq
+
+      return product_ids
     end
 
     def serialize_product(product)
