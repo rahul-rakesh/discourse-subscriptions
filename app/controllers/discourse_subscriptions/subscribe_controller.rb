@@ -8,14 +8,16 @@ module DiscourseSubscriptions
     requires_plugin DiscourseSubscriptions::PLUGIN_NAME
 
     before_action :set_api_key
-    requires_login except: %i[index contributors show]
+    requires_login except: %i[index]
 
     def index
       begin
+        Rails.logger.warn("[SUBS DEBUG] Subscribe#index: Starting.")
         products = []
         if is_stripe_configured?
           local_products = ::DiscourseSubscriptions::Product.all
           user_products = current_user_products
+          Rails.logger.warn("[SUBS DEBUG] Subscribe#index: User is actively subscribed to products: #{user_products.inspect}")
 
           local_products.each do |p|
             begin
@@ -30,6 +32,8 @@ module DiscourseSubscriptions
 
               is_subscribed = user_products.include?(product_data.id)
               is_repurchaseable = product_data.metadata[:repurchaseable] == "true"
+
+              Rails.logger.warn("[SUBS DEBUG] Subscribe#index: Processing product '#{product_data.name}'. Subscribed: #{is_subscribed}, Repurchaseable: #{is_repurchaseable}")
 
               products << {
                 id: product_data.id,
@@ -47,31 +51,6 @@ module DiscourseSubscriptions
           end
         end
         render_json_dump products.sort_by { |p| p[:name] }
-      rescue ::Stripe::InvalidRequestError => e
-        render_json_error e.message
-      end
-    end
-
-    def contributors
-      return unless SiteSetting.discourse_subscriptions_campaign_show_contributors
-      contributor_ids = Set.new
-      campaign_product = SiteSetting.discourse_subscriptions_campaign_product
-      if campaign_product.present?
-        contributor_ids.merge(Customer.where(product_id: campaign_product).last(5).pluck(:user_id))
-      else
-        contributor_ids.merge(Customer.last(5).pluck(:user_id))
-      end
-      contributors = ::User.where(id: contributor_ids)
-      render_serialized(contributors, UserSerializer)
-    end
-
-    def show
-      params.require(:id)
-      begin
-        product = ::Stripe::Product.retrieve(params[:id])
-        plans = ::Stripe::Price.list(active: true, product: params[:id])
-        response = { product: serialize_product(product), plans: serialize_plans(plans) }
-        render_json_dump response
       rescue ::Stripe::InvalidRequestError => e
         render_json_error e.message
       end
@@ -135,12 +114,9 @@ module DiscourseSubscriptions
       duration = duration_in_days || plan[:metadata][:duration]&.to_i
       expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
 
-      # Use a single find_or_create_by call for the customer
       customer = ::DiscourseSubscriptions::Customer.find_or_create_by!(user_id: user.id) do |c|
         c.customer_id = transaction[:customer]
       end
-
-      # Update the customer_id in case it's different (e.g. for existing customers)
       customer.update!(customer_id: transaction[:customer])
 
       ::DiscourseSubscriptions::Subscription.create!(
@@ -149,12 +125,14 @@ module DiscourseSubscriptions
         status: "active",
         provider: provider || SiteSetting.discourse_subscriptions_payment_provider,
         plan_id: plan.id,
+        product_id: plan[:product],
         duration: duration,
         expires_at: expires_at
       )
     end
 
     def current_user_products
+      Rails.logger.warn("[SUBS DEBUG] current_user_products: Starting for user #{current_user&.id}")
       return [] if current_user.nil?
 
       user_subs = ::DiscourseSubscriptions::Subscription.joins(:customer)
@@ -163,31 +141,23 @@ module DiscourseSubscriptions
                                                         .where("expires_at IS NULL OR expires_at > ?", Time.zone.now)
 
       plan_ids = user_subs.pluck(:plan_id).uniq
+      Rails.logger.warn("[SUBS DEBUG] current_user_products: Found active subscription plan_ids: #{plan_ids}")
 
       return [] if plan_ids.empty? || !is_stripe_configured?
 
       product_ids = plan_ids.map do |plan_id|
         begin
-          # Retrieve the plan directly from Stripe, regardless of its active status
           plan = ::Stripe::Price.retrieve(plan_id)
-          plan[:product] # Return the product_id from the plan
+          Rails.logger.warn("[SUBS DEBUG] current_user_products: Retrieved plan #{plan_id}, belongs to product #{plan[:product]}")
+          plan[:product]
         rescue ::Stripe::InvalidRequestError => e
-          # This plan might have been deleted in Stripe, so we ignore it.
+          Rails.logger.error("[SUBS DEBUG] current_user_products: Could not retrieve plan #{plan_id} from Stripe: #{e.message}")
           nil
         end
       end.compact.uniq
 
+      Rails.logger.warn("[SUBS DEBUG] current_user_products: Final list of active product IDs: #{product_ids}")
       return product_ids
-    end
-
-    def serialize_product(product)
-      {
-        id: product[:id],
-        name: product[:name],
-        description: PrettyText.cook(product[:metadata][:description]),
-        subscribed: current_user_products.include?(product[:id]),
-        repurchaseable: product[:metadata][:repurchaseable],
-      }
     end
 
     def serialize_plans(plans)
