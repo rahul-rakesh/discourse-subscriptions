@@ -13,10 +13,8 @@ module DiscourseSubscriptions
       PAGE_SIZE = 50
 
       def index
-        Rails.logger.warn "[SUBS ADMIN DEBUG] --- Entering Admin Subscriptions: INDEX ---"
         begin
           offset = params[:offset].to_i
-
           local_subscriptions = ::DiscourseSubscriptions::Subscription
                                   .joins(customer: :user)
                                   .order(created_at: :desc)
@@ -28,14 +26,10 @@ module DiscourseSubscriptions
           total_subscriptions = local_subscriptions.count
           more_records = total_subscriptions > (offset + PAGE_SIZE)
           local_subscriptions = local_subscriptions.limit(PAGE_SIZE).offset(offset)
-          Rails.logger.warn "[SUBS ADMIN DEBUG] Found #{total_subscriptions} total subscriptions, processing page with #{local_subscriptions.count}."
-
 
           all_subscriptions = local_subscriptions.map do |sub|
             user_obj = sub.customer&.user
             next unless user_obj
-
-            Rails.logger.warn "[SUBS ADMIN DEBUG] Processing local sub ID: #{sub.id}, external_id: #{sub.external_id}, provider: #{sub.provider || 'nil'}, local status: #{sub.status}"
 
             plan_nickname = "N/A"
             product_name = "N/A"
@@ -45,38 +39,32 @@ module DiscourseSubscriptions
             currency = nil
             plan_type = 'one_time'
 
-            if (sub.provider == 'Stripe' || sub.provider.nil?) && sub.external_id.start_with?('sub_') && is_stripe_configured?
+            if (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
               begin
-                Rails.logger.warn "[SUBS ADMIN DEBUG] Retrieving from Stripe: #{sub.external_id}"
-                stripe_sub = ::Stripe::Subscription.retrieve(id: sub.external_id, expand: ['items.data.price.product'])
-                price = stripe_sub.items.data[0].price
+                plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
 
-                plan_nickname = price.nickname
-                product_name = price.product.name
-                unit_amount = price.unit_amount
-                currency = price.currency
-                status = stripe_sub.status # Get the latest status from Stripe
-
-                # If canceled at period end, reflect this in our status and set the expiry date
-                if stripe_sub.cancel_at_period_end
-                  status = 'canceled'
-                  renews_at = stripe_sub.current_period_end
-                  Rails.logger.warn "[SUBS ADMIN DEBUG] Sub is set to cancel at period end. New Expiry: #{Time.at(renews_at).utc}"
-                else
-                  renews_at = stripe_sub.current_period_end
-                  Rails.logger.warn "[SUBS ADMIN DEBUG] Sub is active. Next renewal: #{Time.at(renews_at).utc}"
+                if sub.external_id.start_with?('sub_')
+                  stripe_sub = ::Stripe::Subscription.retrieve(sub.external_id)
+                  status = stripe_sub.status
+                  renews_at = stripe_sub.cancel_at_period_end ? stripe_sub.canceled_at : stripe_sub.current_period_end
+                  plan_type = stripe_sub.items.data[0].price.type
+                elsif sub.expires_at
+                  renews_at = sub.expires_at.to_i
                 end
 
-                plan_type = price.type
-              rescue ::Stripe::InvalidRequestError => e
-                Rails.logger.error "[SUBS ADMIN DEBUG] Stripe API error for #{sub.external_id}: #{e.message}"
+              rescue ::Stripe::InvalidRequestError
                 status = 'not_in_stripe'
               end
-            elsif sub.expires_at.present? # For one-time payments (Razorpay, Manual)
+            elsif sub.expires_at.present?
               renews_at = sub.expires_at.to_i
-              Rails.logger.warn "[SUBS ADMIN DEBUG] One-time sub. Expiry from DB: #{sub.expires_at.utc}"
-            else
-              Rails.logger.warn "[SUBS ADMIN DEBUG] Could not determine renewal date for #{sub.external_id}."
+            end
+
+            if plan
+              plan_nickname = plan[:nickname]
+              product_name = plan[:product]&.name
+              unit_amount = plan[:unit_amount]
+              currency = plan[:currency]
+              plan_type ||= plan[:type]
             end
 
             {
@@ -94,7 +82,6 @@ module DiscourseSubscriptions
             }
           end.compact
 
-          Rails.logger.warn "[SUBS ADMIN DEBUG] Finished processing. Sending payload to frontend."
           render json: {
             subscriptions: all_subscriptions,
             meta: {
@@ -105,8 +92,7 @@ module DiscourseSubscriptions
           }
 
         rescue => e
-          Rails.logger.error("Discourse Subscriptions Error: Failed to process admin subscriptions. Class: #{e.class.name}, Message: #{e.message}, Backtrace: #{e.backtrace.join("\n")}")
-          render_json_error(e.message)
+          render_json_error(e)
         end
       end
 
@@ -162,7 +148,6 @@ module DiscourseSubscriptions
           }
 
           subscribe_controller = DiscourseSubscriptions::SubscribeController.new
-          # We need to use `send` because `finalize_discourse_subscription` is a private method
           subscribe_controller.send(:finalize_discourse_subscription, transaction, plan, user, params[:duration], 'manual')
           render json: success_json
 
