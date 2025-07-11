@@ -111,7 +111,9 @@ module DiscourseSubscriptions
       group = ::Group.find_by_name(group_name) if group_name.present?
       group&.add(user)
 
-      duration = duration_in_days || plan[:metadata][:duration]&.to_i
+      duration = duration_in_days.present? ? duration_in_days.to_i : nil
+      duration ||= plan[:metadata][:duration]&.to_i
+
       expires_at = duration.present? && duration > 0 ? duration.days.from_now : nil
 
       customer = ::DiscourseSubscriptions::Customer.find_or_create_by!(user_id: user.id) do |c|
