@@ -5,49 +5,40 @@ module ::Jobs
     every 1.day
 
     def execute(args)
-      Rails.logger.warn("[SUBS DEBUG] Running CheckExpiredSubscriptions job.")
       return unless SiteSetting.discourse_subscriptions_enabled
+
+      api_key = args[:api_key] || SiteSetting.discourse_subscriptions_secret_key
+      return unless api_key.present?
+
+      ::Stripe.api_key = api_key
 
       expired_subscriptions = ::DiscourseSubscriptions::Subscription
                                 .where(status: 'active')
                                 .where.not(expires_at: nil)
                                 .where("expires_at < ?", Time.zone.now)
 
-      Rails.logger.warn("[SUBS DEBUG] Found #{expired_subscriptions.count} subscriptions to expire.")
       return if expired_subscriptions.empty?
 
       expired_subscriptions.each do |sub|
         begin
-          user = sub.customer&.user
-          unless user
-            Rails.logger.warn("[SUBS DEBUG] Could not find user for subscription ID #{sub.id}, expiring it anyway.")
-            sub.update(status: 'expired')
-            next
-          end
-
-          # Attempt to find the plan on Stripe to get group info, but do not fail if it's missing
-          if sub.plan_id && SiteSetting.discourse_subscriptions_public_key.present?
+          if (user = sub.customer&.user) && sub.plan_id
             begin
               plan = ::Stripe::Price.retrieve(sub.plan_id)
-              group_name = plan.metadata&.group_name
-              group = ::Group.find_by_name(group_name) if group_name.present?
-
-              if group
-                Rails.logger.warn("[SUBS DEBUG] Expiring user #{user.username} from group #{group.name} for subscription #{sub.external_id}")
+              if (group_name = plan[:metadata][:group_name]).present? && (group = ::Group.find_by_name(group_name))
                 group.remove(user)
               end
-
-            rescue ::Stripe::InvalidRequestError => e
-              Rails.logger.warn("[SUBS DEBUG] Could not retrieve plan #{sub.plan_id} from Stripe while expiring sub #{sub.id}. It may have been deleted. Error: #{e.message}")
+            rescue ::Stripe::InvalidRequestError
+              # Plan may have been deleted from Stripe; this is fine.
+              # We still want to expire the local subscription.
             end
           end
 
-          # IMPORTANT: Mark the subscription as expired regardless of whether the group removal was successful
-          sub.update(status: 'expired')
-          Rails.logger.warn("[SUBS DEBUG] Successfully marked subscription #{sub.id} as 'expired' for user #{user.username}.")
+          # Always mark the local subscription as expired.
+          # Use update! to ensure any failure is logged by the rescue block.
+          sub.update!(status: 'expired')
 
         rescue => e
-          Rails.logger.error("[SUBS DEBUG] Failed to process expired subscription #{sub.id}. Error: #{e.message}")
+          Rails.logger.error("Failed to process expired subscription #{sub.id}. Error: #{e.class} - #{e.message}")
           next
         end
       end
