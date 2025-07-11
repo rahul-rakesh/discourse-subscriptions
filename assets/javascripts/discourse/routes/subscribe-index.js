@@ -1,24 +1,30 @@
 import Route from "@ember/routing/route";
+import { service } from "@ember/service"; // Import service
 import Product from "discourse/plugins/discourse-subscriptions/discourse/models/product";
-import Plan from "discourse/plugins/discourse-subscriptions/discourse/models/plan"; // Import the Plan model
+import Plan from "discourse/plugins/discourse-subscriptions/discourse/models/plan";
 
 export default class SubscribeIndexRoute extends Route {
+  @service siteSettings; // Inject siteSettings service
+
   model() {
     return Product.findAll().then(products => {
-      // Loop through each product returned from the server
+      const isRazorpay = this.siteSettings.discourse_subscriptions_payment_provider === 'Razorpay';
+
       products.forEach(product => {
-        // Check if the product has a 'plans' array
         if (product.plans && product.plans.length > 0) {
-          // Overwrite the plain JavaScript 'plans' array with an array
-          // of proper Ember Plan models that have the 'amountDollars' getter.
-          const planModels = product.plans.map(p => Plan.create(p));
+          let plans = product.plans;
+
+          // If Razorpay is active, filter out any recurring plans
+          if (isRazorpay) {
+            plans = plans.filter(p => p.type !== 'recurring');
+          }
+
+          const planModels = plans.map(p => Plan.create(p));
           product.set('plans', planModels);
         }
       });
-      return products;
+      // Filter out products that have no plans left after filtering
+      return products.filter(p => p.plans && p.plans.length > 0);
     });
   }
-
-  // NOTE: The afterModel hook that caused redirects has been removed
-  // to ensure this new pricing page is always shown.
 }

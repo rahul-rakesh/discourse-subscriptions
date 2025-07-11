@@ -90,6 +90,12 @@ module DiscourseSubscriptions
         plan = ::Stripe::Price.retrieve(params[:plan])
 
         if SiteSetting.discourse_subscriptions_payment_provider == "Razorpay"
+
+          # Add this check to prevent recurring payments
+          if plan.type == 'recurring'
+            return render_json_error(I18n.t("discourse_subscriptions.razorpay.recurring_not_supported"))
+          end
+
           notes = {
             user_id: current_user.id,
             username: current_user.username,
