@@ -12,12 +12,10 @@ module DiscourseSubscriptions
 
     def index
       begin
-        Rails.logger.warn("[SUBS DEBUG] Subscribe#index: Starting.")
         products = []
         if is_stripe_configured?
           local_products = ::DiscourseSubscriptions::Product.all
           user_products = current_user_products
-          Rails.logger.warn("[SUBS DEBUG] Subscribe#index: User is actively subscribed to products: #{user_products.inspect}")
 
           local_products.each do |p|
             begin
@@ -33,7 +31,6 @@ module DiscourseSubscriptions
               is_subscribed = user_products.include?(product_data.id)
               is_repurchaseable = product_data.metadata[:repurchaseable] == "true"
 
-              Rails.logger.warn("[SUBS DEBUG] Subscribe#index: Processing product '#{product_data.name}'. Subscribed: #{is_subscribed}, Repurchaseable: #{is_repurchaseable}")
 
               products << {
                 id: product_data.id,
@@ -134,7 +131,6 @@ module DiscourseSubscriptions
     end
 
     def current_user_products
-      Rails.logger.warn("[SUBS DEBUG] current_user_products: Starting for user #{current_user&.id}")
       return [] if current_user.nil?
 
       user_subs = ::DiscourseSubscriptions::Subscription.joins(:customer)
@@ -143,22 +139,18 @@ module DiscourseSubscriptions
                                                         .where("expires_at IS NULL OR expires_at > ?", Time.zone.now)
 
       plan_ids = user_subs.pluck(:plan_id).uniq
-      Rails.logger.warn("[SUBS DEBUG] current_user_products: Found active subscription plan_ids: #{plan_ids}")
 
       return [] if plan_ids.empty? || !is_stripe_configured?
 
       product_ids = plan_ids.map do |plan_id|
         begin
           plan = ::Stripe::Price.retrieve(plan_id)
-          Rails.logger.warn("[SUBS DEBUG] current_user_products: Retrieved plan #{plan_id}, belongs to product #{plan[:product]}")
           plan[:product]
         rescue ::Stripe::InvalidRequestError => e
-          Rails.logger.error("[SUBS DEBUG] current_user_products: Could not retrieve plan #{plan_id} from Stripe: #{e.message}")
           nil
         end
       end.compact.uniq
 
-      Rails.logger.warn("[SUBS DEBUG] current_user_products: Final list of active product IDs: #{product_ids}")
       return product_ids
     end
 
