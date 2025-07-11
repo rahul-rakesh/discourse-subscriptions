@@ -13,6 +13,7 @@ module DiscourseSubscriptions
       PAGE_SIZE = 50
 
       def index
+        Rails.logger.warn "[SUBS ADMIN DEBUG] --- Entering Admin Subscriptions: INDEX ---"
         begin
           offset = params[:offset].to_i
 
@@ -29,40 +30,58 @@ module DiscourseSubscriptions
 
           local_subscriptions = local_subscriptions.limit(PAGE_SIZE).offset(offset)
 
-          all_subscriptions = []
-          all_plans = is_stripe_configured? ? ::Stripe::Price.list(limit: 100, active: true, expand: ['data.product']) : []
-
-          local_subscriptions.each do |sub|
+          all_subscriptions = local_subscriptions.map do |sub|
             user_obj = sub.customer&.user
             next unless user_obj
 
-            serialized_sub = {
-              id: sub.external_id, provider: (sub.provider || 'Stripe').capitalize, status: sub.status,
-              user: { id: user_obj.id, username: user_obj.username, avatar_template: user_obj.avatar_template_url },
-              created_at: sub.created_at.to_i, expires_at: sub.expires_at&.to_i,
-              unit_amount: nil, currency: nil, plan_type: nil
-            }
-            plan = all_plans.find { |p| p.id == sub.plan_id }
+            plan_nickname = "N/A"
+            product_name = "N/A"
+            renews_at = nil
+            status = sub.status
+            unit_amount = nil
+            currency = nil
+            plan_type = 'one_time'
 
-            if sub.provider == 'Stripe' && is_stripe_configured?
+            if (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
               begin
-                # Only try to retrieve as a Subscription object if it looks like one
-                if sub.external_id.start_with?("sub_")
-                  api_sub = ::Stripe::Subscription.retrieve({ id: sub.external_id, expand: ['plan.product'] })
-                  plan ||= api_sub&.plan
-                  serialized_sub[:status] = api_sub.status if api_sub
-                  serialized_sub[:expires_at] = api_sub.cancel_at_period_end ? api_sub.current_period_end : nil if api_sub
+                plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
+                if sub.external_id.start_with?('sub_')
+                  stripe_sub = ::Stripe::Subscription.retrieve(sub.external_id)
+                  status = stripe_sub.status
+                  renews_at = stripe_sub.cancel_at_period_end ? stripe_sub.canceled_at : stripe_sub.current_period_end
+                  plan_type = stripe_sub.items.data[0].price.type
+                elsif sub.expires_at
+                  renews_at = sub.expires_at.to_i
                 end
               rescue ::Stripe::InvalidRequestError
-                serialized_sub[:status] = 'not_in_stripe'
+                status = 'not_in_stripe'
               end
+            elsif sub.expires_at.present?
+              renews_at = sub.expires_at.to_i
             end
 
             if plan
-              serialized_sub.merge!(plan_name: plan.product&.name, plan_nickname: plan.nickname, unit_amount: plan.unit_amount, currency: plan.currency, plan_type: plan.type)
+              plan_nickname = plan[:nickname]
+              product_name = plan[:product]&.name
+              unit_amount = plan[:unit_amount]
+              currency = plan[:currency]
+              plan_type ||= plan[:type]
             end
-            all_subscriptions << serialized_sub
-          end
+
+            {
+              id: sub.external_id,
+              provider: (sub.provider || 'Stripe').capitalize,
+              status: status,
+              user: { id: user_obj.id, username: user_obj.username, avatar_template: user_obj.avatar_template_url },
+              created_at: sub.created_at.to_i,
+              expires_at: renews_at,
+              plan_name: product_name,
+              plan_nickname: plan_nickname,
+              unit_amount: unit_amount,
+              currency: currency,
+              plan_type: plan_type
+            }
+          end.compact
 
           render json: {
             subscriptions: all_subscriptions,
@@ -74,9 +93,8 @@ module DiscourseSubscriptions
           }
 
         rescue => e
-          error_message = "Discourse Subscriptions Error: Failed to process subscriptions. Class: #{e.class.name}, Message: #{e.message}, Backtrace: #{e.backtrace.join("\n")}"
-          Rails.logger.error(error_message)
-          render_json_error(error_message)
+          Rails.logger.error("Discourse Subscriptions Error: Failed to process admin subscriptions. Class: #{e.class.name}, Message: #{e.message}, Backtrace: #{e.backtrace.join("\n")}")
+          render_json_error(e.message)
         end
       end
 
@@ -85,8 +103,8 @@ module DiscourseSubscriptions
         begin
           subscription = ::Stripe::Subscription.update(params[:id], { cancel_at_period_end: true })
           local_sub = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
-          local_sub&.update(status: subscription.status)
-          render_json_dump subscription
+          local_sub&.update(status: 'canceled')
+          render json: subscription
         rescue ::Stripe::InvalidRequestError => e
           render_json_error e.message
         end
@@ -131,10 +149,8 @@ module DiscourseSubscriptions
             customer: "cus_manual_#{user.id}"
           }
 
-          # We need to instantiate the controller to use the method
           subscribe_controller = DiscourseSubscriptions::SubscribeController.new
           subscribe_controller.send(:finalize_discourse_subscription, transaction, plan, user, params[:duration], 'manual')
-
           render json: success_json
 
         rescue ActiveRecord::RecordInvalid => e
