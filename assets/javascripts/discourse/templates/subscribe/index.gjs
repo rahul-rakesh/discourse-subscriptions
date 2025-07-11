@@ -7,7 +7,7 @@ import { i18n } from "discourse-i18n";
 export default RouteTemplate(
 <template>
   {{#if @controller.currentUser}}
-    <div class="pricing-page-wrapper">
+    <div class="pricing-page">
       {{#if @controller.productForCheckout}}
         <CheckoutForm
           @product={{@controller.productForCheckout}}
