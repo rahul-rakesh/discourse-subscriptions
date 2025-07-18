@@ -162,6 +162,24 @@ module DiscourseSubscriptions
       end.compact.sort_by { |plan| plan[:unit_amount] }
     end
 
+    def contributors
+      return unless SiteSetting.discourse_subscriptions_campaign_show_contributors
+
+      subscriptions = ::DiscourseSubscriptions::Subscription.order(created_at: :desc)
+
+      campaign_product = SiteSetting.discourse_subscriptions_campaign_product
+      if campaign_product.present?
+        subscriptions = subscriptions.where(product_id: campaign_product)
+      end
+
+      user_ids = subscriptions.limit(15).joins(:customer).pluck("discourse_subscriptions_customers.user_id").uniq.first(5)
+
+      contributors = ::User.where(id: user_ids)
+
+      # Renders the user data needed for the avatar display on the campaign banner
+      render_serialized(contributors, BasicUserSerializer)
+    end
+
     def metadata_user
       { user_id: current_user.id, username: current_user.username_lower }
     end
