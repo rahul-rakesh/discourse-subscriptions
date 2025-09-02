@@ -1,11 +1,10 @@
 # frozen_string_literal: true
 
-# name: discourse-subscriptions
-# about: Allows admins to sell subscriptions to site content.
-# meta_topic_id: 140818
-# version: 2.8.1
-# url: https://github.com/discourse/discourse-subscriptions
-# authors: Rimian Perkins, Justin DiRose
+# name: discourse-subscriptions-techenclave
+# about: Simplified subscription management for TechEnclave (Campaign features removed)
+# version: 3.0.0-techenclave
+# url: https://github.com/techenclave/discourse-subscriptions-private
+# authors: TechEnclave Team
 
 enabled_site_setting :discourse_subscriptions_enabled
 
@@ -110,15 +109,4 @@ after_initialize do
 
   Discourse::Application.routes.append { mount ::DiscourseSubscriptions::Engine, at: "s" }
 
-  add_to_serializer(:site, :show_campaign_banner) do
-    begin
-      enabled = SiteSetting.discourse_subscriptions_enabled
-      campaign_enabled = SiteSetting.discourse_subscriptions_campaign_enabled
-      goal_met = Discourse.redis.get("subscriptions_goal_met_date")
-
-      enabled && campaign_enabled && (!goal_met || 7.days.ago <= Date.parse(goal_met))
-    rescue StandardError
-      false
-    end
-  end
 end

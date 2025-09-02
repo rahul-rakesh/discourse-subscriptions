@@ -12,22 +12,6 @@ export default RouteTemplate(
 
     {{#if @controller.stripeConfigured}}
       <div class="discourse-subscriptions-buttons">
-        {{#if @controller.campaignEnabled}}
-          <DButton
-            @label="discourse_subscriptions.campaign.refresh_campaign"
-            @icon="rotate"
-            @action={{@controller.triggerManualRefresh}}
-          />
-        {{else}}
-          {{#unless @controller.campaignProductSet}}
-            <DButton
-              @label="discourse_subscriptions.campaign.one_click_campaign"
-              @icon="square-plus"
-              @action={{@controller.createOneClickCampaign}}
-              @isLoading={{@controller.loading}}
-            />
-          {{/unless}}
-        {{/if}}
         <DButton
           @action={{@controller.showGrantSubscriptionModal}}
           @label="discourse_subscriptions.admin.grant_subscription"
