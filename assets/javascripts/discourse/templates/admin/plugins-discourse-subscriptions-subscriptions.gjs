@@ -18,17 +18,17 @@ export default RouteTemplate(
   {{else}}
     <div class="subscription-controls">
       <UserChooser
-          @value={{@controller.username}}
-          @onChange={{@controller.filterByUser}}
-          @maximum={{1}}
-          @placeholder="Filter by user..."
+        @value={{@controller.username}}
+        @onChange={{@controller.filterByUser}}
+        @maximum={{1}}
+        @placeholder="Filter by user..."
       />
       {{#if @controller.username}}
         <DButton
-            @action={{@controller.clearFilter}}
-            @icon="times"
-            class="btn-icon btn-clear-filter"
-            @title="Clear filter"
+          @action={{@controller.clearFilter}}
+          @icon="times"
+          class="btn-icon btn-clear-filter"
+          @title="Clear filter"
         />
       {{/if}}
     </div>
@@ -57,9 +57,32 @@ export default RouteTemplate(
                 </LinkTo>
               </td>
               <td>{{subscription.provider}}</td>
-              <td>{{subscription.plan_name}}</td>
-              <td>{{subscription.plan_nickname}}</td>
-              <td>{{subscription.amountDollars}}</td>
+              <td>
+                {{#if subscription.detailsLoaded}}
+                  {{subscription.plan_name}}
+                {{else}}
+                  <DButton
+                    @action={{fn @controller.loadSubscriptionDetails subscription}}
+                    @label="Load Details"
+                    @isLoading={{subscription.loadingDetails}}
+                    class="btn-small"
+                  />
+                {{/if}}
+              </td>
+              <td>
+                {{#if subscription.detailsLoaded}}
+                  {{subscription.plan_nickname}}
+                {{else}}
+                  -
+                {{/if}}
+              </td>
+              <td>
+                {{#if subscription.detailsLoaded}}
+                  {{subscription.amountDollars}}
+                {{else}}
+                  -
+                {{/if}}
+              </td>
               <td><span class="status-badge">{{subscription.status}}</span></td>
               <td>{{formatUnixDate subscription.created_at}}</td>
               <td>{{formatAbsoluteDate subscription.expires_at}}</td>
@@ -68,18 +91,18 @@ export default RouteTemplate(
                   {{loadingSpinner size="small"}}
                 {{else if (and (eq subscription.provider "Stripe") (eq subscription.plan_type "recurring"))}}
                   <DButton
-                      @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
-                      @label="cancel"
-                      @action={{fn @controller.showCancelModal subscription}}
-                      @icon="xmark"
+                    @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
+                    @label="cancel"
+                    @action={{fn @controller.showCancelModal subscription}}
+                    @icon="xmark"
                   />
                 {{else if (or (not (eq subscription.provider "Stripe")) (eq subscription.plan_type "one_time"))}}
                   <DButton
-                      @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
-                      @label="discourse_subscriptions.admin.revoke_access"
-                      @action={{fn @controller.revokeAccess subscription}}
-                      @icon="user-slash"
-                      class="btn-danger"
+                    @disabled={{or (eq subscription.status "canceled") (eq subscription.status "revoked")}}
+                    @label="discourse_subscriptions.admin.revoke_access"
+                    @action={{fn @controller.revokeAccess subscription}}
+                    @icon="user-slash"
+                    class="btn-danger"
                   />
                 {{/if}}
               </td>

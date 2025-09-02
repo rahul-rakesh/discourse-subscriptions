@@ -31,57 +31,20 @@ module DiscourseSubscriptions
             user_obj = sub.customer&.user
             next unless user_obj
 
-            plan_nickname = "N/A"
-            product_name = "N/A"
-            renews_at = nil
-            status = sub.status
-            unit_amount = nil
-            currency = nil
-            plan_type = 'one_time'
-            plan = nil
-
-            if (sub.provider == 'Stripe' || sub.provider.nil?) && is_stripe_configured?
-              begin
-                plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil
-                if sub.external_id.start_with?('sub_')
-                  stripe_sub = ::Stripe::Subscription.retrieve(sub.external_id)
-                  status = stripe_sub.status
-                  if stripe_sub.cancel_at_period_end
-                    status = 'canceled'
-                  end
-                  renews_at = stripe_sub.current_period_end
-                  plan_type = stripe_sub.items.data[0].price.type
-                elsif sub.expires_at
-                  renews_at = sub.expires_at.to_i
-                end
-              rescue ::Stripe::InvalidRequestError
-                status = 'not_in_stripe'
-              end
-            elsif sub.expires_at.present?
-              renews_at = sub.expires_at.to_i
-              plan = ::Stripe::Price.retrieve(id: sub.plan_id, expand: ['product']) rescue nil if is_stripe_configured?
-            end
-
-            if plan
-              plan_nickname = plan[:nickname]
-              product_name = plan[:product]&.name
-              unit_amount = plan[:unit_amount]
-              currency = plan[:currency]
-              plan_type ||= plan[:type]
-            end
-
             {
               id: sub.external_id,
               provider: (sub.provider || 'Stripe').capitalize,
-              status: status,
+              status: sub.status || 'active',
               user: { id: user_obj.id, username: user_obj.username, avatar_template: user_obj.avatar_template_url },
               created_at: sub.created_at.to_i,
-              expires_at: renews_at,
-              plan_name: product_name,
-              plan_nickname: plan_nickname,
-              unit_amount: unit_amount,
-              currency: currency,
-              plan_type: plan_type
+              expires_at: sub.expires_at&.to_i,
+              plan_id: sub.plan_id,
+              product_id: sub.product_id,
+              plan_name: "Loading...",
+              plan_nickname: "Click to load",
+              unit_amount: nil,
+              currency: nil,
+              plan_type: 'unknown'
             }
           end.compact
 
@@ -96,6 +59,58 @@ module DiscourseSubscriptions
 
         rescue => e
           render_json_error(e)
+        end
+      end
+
+      def load_details
+        params.require(:id)
+        begin
+          subscription = ::DiscourseSubscriptions::Subscription.find_by(external_id: params[:id])
+          return render_json_error("Subscription not found") unless subscription
+
+          plan_nickname = "N/A"
+          product_name = "N/A"
+          renews_at = subscription.expires_at&.to_i
+          status = subscription.status
+          unit_amount = nil
+          currency = nil
+          plan_type = 'one_time'
+
+          if (subscription.provider == 'Stripe' || subscription.provider.nil?) && is_stripe_configured?
+            begin
+              plan = ::Stripe::Price.retrieve(id: subscription.plan_id, expand: ['product']) if subscription.plan_id
+              if subscription.external_id.start_with?('sub_')
+                stripe_sub = ::Stripe::Subscription.retrieve(subscription.external_id)
+                status = stripe_sub.status
+                status = 'canceled' if stripe_sub.cancel_at_period_end
+                renews_at = stripe_sub.current_period_end
+                plan_type = 'recurring'
+              end
+            rescue ::Stripe::InvalidRequestError
+              status = 'not_in_stripe'
+            end
+          end
+
+          if plan
+            plan_nickname = plan[:nickname]
+            product_name = plan[:product]&.name
+            unit_amount = plan[:unit_amount]
+            currency = plan[:currency]
+            plan_type = plan[:type] if plan[:type]
+          end
+
+          render json: {
+            id: subscription.external_id,
+            plan_name: product_name,
+            plan_nickname: plan_nickname,
+            unit_amount: unit_amount,
+            currency: currency,
+            plan_type: plan_type,
+            status: status,
+            expires_at: renews_at
+          }
+        rescue => e
+          render_json_error(e.message)
         end
       end
 

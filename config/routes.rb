@@ -13,6 +13,7 @@ DiscourseSubscriptions::Engine.routes.draw do
     resources :subscriptions, only: %i[index destroy] do # Add a do/end block here
       post :revoke, on: :member
       post :grant, on: :collection
+      get :load_details, on: :member  # ADD THIS LINE
     end
     resources :products
     resources :coupons, only: %i[index create]

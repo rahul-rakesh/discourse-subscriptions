@@ -54,6 +54,33 @@ export default class AdminPluginsDiscourseSubscriptionsSubscriptionsController e
       })
       .finally(() => { this.isLoadingMore = false; });
   }
+
+  @action
+  loadSubscriptionDetails(subscription) {
+    subscription.set('loadingDetails', true);
+
+    ajax(`/s/admin/subscriptions/${subscription.id}/load_details`, {
+      method: "GET"
+    })
+      .then((result) => {
+        subscription.setProperties({
+          plan_name: result.plan_name,
+          plan_nickname: result.plan_nickname,
+          unit_amount: result.unit_amount,
+          currency: result.currency,
+          plan_type: result.plan_type,
+          status: result.status,
+          expires_at: result.expires_at,
+          detailsLoaded: true
+        });
+      })
+      .catch((error) => {
+        this.dialog.alert("Failed to load subscription details");
+      })
+      .finally(() => {
+        subscription.set('loadingDetails', false);
+      });
+  }
   @action
   showCancelModal(subscription) {
     this.modal.show(AdminCancelSubscription, {
