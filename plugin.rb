@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# name: discourse-subscriptions-techenclave
+# name: discourse-subscriptions
 # about: Simplified subscription management for TechEnclave (Campaign features removed)
 # version: 3.0.0-techenclave
 # url: https://github.com/techenclave/discourse-subscriptions-private
